@@ -14,6 +14,8 @@
 *
 *   created on: 1999aug06
 *   created by: Markus W. Scherer, updated by Matitiahu Allouche
+*   modified:   2018-11-22, Paul Werbicki - added UText support
+*
 */
 
 #ifndef UBIDIIMP_H
@@ -254,8 +256,14 @@ struct UBiDi {
      */
     const UBiDi * pParaBiDi;
 
+    /* UText to the current text */
+    UText ut;
+
     /* alias pointer to the current text */
-    const UChar *text;
+    const UChar *para; // Populated only when called from set_Para/set_Text
+
+    /* start of the current text */
+    int32_t utNativeStart;
 
     /* length of the current text */
     int32_t originalLength;
@@ -316,10 +324,8 @@ struct UBiDi {
     UBiDiLevel defaultParaLevel;
 
     /* context data */
-    const UChar *prologue;
-    int32_t proLength;
-    const UChar *epilogue;
-    int32_t epiLength;
+    UText prologue;
+    UText epilogue;
 
     /* the following is set in ubidi_setPara, used in processPropertySeq */
     const struct ImpTabPair * pImpTabPair;  /* pointer to levels state table pair */

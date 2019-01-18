@@ -21,6 +21,7 @@
 
 #include "unicode/utypes.h"
 #include "unicode/uchar.h"
+#include "unicode/utext.h"
 #include "unicode/localpointer.h"
 
 /**
@@ -1057,7 +1058,7 @@ U_STABLE uint32_t U_EXPORT2
 ubidi_getReorderingOptions(UBiDi *pBiDi);
 
 /**
- * Set the context before a call to ubidi_setPara().<p>
+ * Set the context before a call to ubidi_setPara(), or ubidi_setUPara().<p>
  *
  * ubidi_setPara() computes the left-right directionality for a given piece
  * of text which is supplied as one of its arguments. Sometimes this piece
@@ -1138,6 +1139,7 @@ ubidi_getReorderingOptions(UBiDi *pBiDi);
  * @param pErrorCode must be a valid pointer to an error code value.
  *
  * @see ubidi_setPara
+ * @see ubidi_setUPara
  * @stable ICU 4.8
  */
 U_STABLE void U_EXPORT2
@@ -1147,10 +1149,90 @@ ubidi_setContext(UBiDi *pBiDi,
                  UErrorCode *pErrorCode);
 
 /**
+ * Set the context before a call to ubidi_setPara(), or ubidi_setUPara().<p>
+ *
+ * ubidi_setPara() computes the left-right directionality for a given piece
+ * of text which is supplied as one of its arguments. Sometimes this piece
+ * of text (the "main text") should be considered in context, because text
+ * appearing before ("prologue") and/or after ("epilogue") the main text
+ * may affect the result of this computation.<p>
+ *
+ * This function specifies the prologue and/or the epilogue for the next
+ * call to ubidi_setPara(). The characters specified as prologue and
+ * epilogue should not be modified by the calling program until the call
+ * to ubidi_setPara() has returned. If successive calls to ubidi_setPara()
+ * all need specification of a context, ubidi_setContext() must be called
+ * before each call to ubidi_setPara(). In other words, a context is not
+ * "remembered" after the following successful call to ubidi_setPara().<p>
+ *
+ * If a call to ubidi_setPara() specifies UBIDI_DEFAULT_LTR or
+ * UBIDI_DEFAULT_RTL as paraLevel and is preceded by a call to
+ * ubidi_setContext() which specifies a prologue, the paragraph level will
+ * be computed taking in consideration the text in the prologue.<p>
+ *
+ * When ubidi_setPara() is called without a previous call to
+ * ubidi_setContext, the main text is handled as if preceded and followed
+ * by strong directional characters at the current paragraph level.
+ * Calling ubidi_setContext() with specification of a prologue will change
+ * this behavior by handling the main text as if preceded by the last
+ * strong character appearing in the prologue, if any.
+ * Calling ubidi_setContext() with specification of an epilogue will change
+ * the behavior of ubidi_setPara() by handling the main text as if followed
+ * by the first strong character or digit appearing in the epilogue, if any.<p>
+ *
+ * Note 1: if <code>ubidi_setContext</code> is called repeatedly without
+ *         calling <code>ubidi_setPara</code>, the earlier calls have no effect,
+ *         only the last call will be remembered for the next call to
+ *         <code>ubidi_setPara</code>.<p>
+ *
+ * Note 2: calling <code>ubidi_setContext(pBiDi, NULL, 0, NULL, 0, &errorCode)</code>
+ *         cancels any previous setting of non-empty prologue or epilogue.
+ *         The next call to <code>ubidi_setPara()</code> will process no
+ *         prologue or epilogue.<p>
+ *
+ * Note 3: users must be aware that even after setting the context
+ *         before a call to ubidi_setPara() to perform e.g. a logical to visual
+ *         transformation, the resulting string may not be identical to what it
+ *         would have been if all the text, including prologue and epilogue, had
+ *         been processed together.<br>
+ * Example (upper case letters represent RTL characters):<br>
+ * &nbsp;&nbsp;prologue = "<code>abc DE</code>"<br>
+ * &nbsp;&nbsp;epilogue = none<br>
+ * &nbsp;&nbsp;main text = "<code>FGH xyz</code>"<br>
+ * &nbsp;&nbsp;paraLevel = UBIDI_LTR<br>
+ * &nbsp;&nbsp;display without prologue = "<code>HGF xyz</code>"
+ *             ("HGF" is adjacent to "xyz")<br>
+ * &nbsp;&nbsp;display with prologue = "<code>abc HGFED xyz</code>"
+ *             ("HGF" is not adjacent to "xyz")<br>
+ *
+ * @param pBiDi is a paragraph <code>UBiDi</code> object.
+ *
+ * @param prologueUt is a pointer to a UText which precedes the text that
+ *        will be specified in a coming call to ubidi_setPara().
+ *        If there is no prologue to consider, then this pointer can be NULL.
+ *        The UText is cloned and stored in the UBiDi object.
+ *
+ * @param epilogueUt is a pointer to a UText which follows the text that
+ *        will be specified in a coming call to ubidi_setPara().
+ *        If there is no epilogue to consider, then this pointer can be NULL.
+ *        The UText is cloned and stored in the UBiDi object.
+ *
+ * @param pErrorCode must be a valid pointer to an error code value.
+ *
+ * @see ubidi_setPara
+ * @see ubidi_setUPara
+ * @stable 
+ */
+U_CAPI void U_EXPORT2
+ubidi_setUContext(UBiDi *pBiDi,
+                 UText *prologueUt,
+                 UText *epilogueUt,
+                 UErrorCode *pErrorCode);
+
+/**
  * Perform the Unicode Bidi algorithm. It is defined in the
  * <a href="http://www.unicode.org/unicode/reports/tr9/">Unicode Standard Annex #9</a>,
- * version 13,
- * also described in The Unicode Standard, Version 4.0 .<p>
+ * version 13, also described in The Unicode Standard, Version 4.0 .<p>
  *
  * This function takes a piece of plain text containing one or more paragraphs,
  * with or without externally specified embedding levels from <i>styled</i>
@@ -1230,6 +1312,88 @@ ubidi_setContext(UBiDi *pBiDi,
  */
 U_STABLE void U_EXPORT2
 ubidi_setPara(UBiDi *pBiDi, const UChar *text, int32_t length,
+              UBiDiLevel paraLevel, UBiDiLevel *embeddingLevels,
+              UErrorCode *pErrorCode);
+
+/**
+ * Perform the Unicode Bidi algorithm. It is defined in the
+ * <a href="http://www.unicode.org/unicode/reports/tr9/">Unicode Standard Annex #9</a>,
+ * version 13, also described in The Unicode Standard, Version 4.0 .<p>
+ *
+ * This function takes a UText containing one or more paragraphs,
+ * with or without externally specified embedding levels from <i>styled</i>
+ * text and computes the left-right-directionality of each character.<p>
+ *
+ * If the entire UText is all of the same directionality, then
+ * the function may not perform all the steps described by the algorithm,
+ * i.e., some levels may not be the same as if all steps were performed.
+ * This is not relevant for unidirectional text.<br>
+ * For example, in pure LTR text with numbers the numbers would get
+ * a resolved level of 2 higher than the surrounding text according to
+ * the algorithm. This implementation may set all resolved levels to
+ * the same value in such a case.<p>
+ *
+ * The UText can be composed of multiple paragraphs. Occurrence of a block
+ * separator in the UText terminates a paragraph, and whatever comes next starts
+ * a new paragraph. The exception to this rule is when a Carriage Return (CR)
+ * is followed by a Line Feed (LF). Both CR and LF are block separators, but
+ * in that case, the pair of characters is considered as terminating the
+ * preceding paragraph, and a new paragraph will be started by a character
+ * coming after the LF.
+ *
+ * @param pBiDi A <code>UBiDi</code> object allocated with <code>ubidi_open()</code>
+ *        which will be set to contain the reordering information,
+ *        especially the resolved levels for all the characters in <code>text</code>.
+ *
+ * @param ut is a pointer to a UText that the Bidi algorithm will be performed on.
+ *        The UText is cloned and stored in the UBiDi object and can be retrieved
+ *        with <code>ubidi_getUText()</code>.<br>
+ *
+ * @param paraLevel specifies the default level for the UText;
+ *        it is typically 0 (LTR) or 1 (RTL).
+ *        If the function shall determine the paragraph level from the UText,
+ *        then <code>paraLevel</code> can be set to
+ *        either <code>#UBIDI_DEFAULT_LTR</code>
+ *        or <code>#UBIDI_DEFAULT_RTL</code>; if the UText contains multiple
+ *        paragraphs, the paragraph level shall be determined separately for
+ *        each paragraph; if a paragraph does not include any strongly typed
+ *        character, then the desired default is used (0 for LTR or 1 for RTL).
+ *        Any other value between 0 and <code>#UBIDI_MAX_EXPLICIT_LEVEL</code>
+ *        is also valid, with odd levels indicating RTL.
+ *
+ * @param embeddingLevels (in) may be used to preset the embedding and override levels,
+ *        ignoring characters like LRE and PDF in the text.
+ *        A level overrides the directional property of its corresponding
+ *        (same index) character if the level has the
+ *        <code>#UBIDI_LEVEL_OVERRIDE</code> bit set.<br><br>
+ *        Aside from that bit, it must be
+ *        <code>paraLevel<=embeddingLevels[]<=UBIDI_MAX_EXPLICIT_LEVEL</code>,
+ *        except that level 0 is always allowed.
+ *        Level 0 for a paragraph separator prevents reordering of paragraphs;
+ *        this only works reliably if <code>#UBIDI_LEVEL_OVERRIDE</code>
+ *        is also set for paragraph separators.
+ *        Level 0 for other characters is treated as a wildcard
+ *        and is lifted up to the resolved level of the surrounding paragraph.<br><br>
+ *        <strong>Caution: </strong>A copy of this pointer, not of the levels,
+ *        will be stored in the <code>UBiDi</code> object;
+ *        the <code>embeddingLevels</code> array must not be
+ *        deallocated before the <code>UBiDi</code> structure is destroyed or reused,
+ *        and the <code>embeddingLevels</code>
+ *        should not be modified to avoid unexpected results on subsequent Bidi operations.
+ *        However, the <code>ubidi_setPara()</code> and
+ *        <code>ubidi_setLine()</code> functions may modify some or all of the levels.<br><br>
+ *        After the <code>UBiDi</code> object is reused or destroyed, the caller
+ *        must take care of the deallocation of the <code>embeddingLevels</code> array.<br><br>
+ *        <strong>Note:</strong> the <code>embeddingLevels</code> array must be
+ *        at least <code>length</code> long.
+ *        This pointer can be <code>NULL</code> if this
+ *        value is not necessary.
+ *
+ * @param pErrorCode must be a valid pointer to an error code value.
+ * @stable 
+ */
+U_CAPI void U_EXPORT2
+ubidi_setUPara(UBiDi *pBiDi, UText *ut,
               UBiDiLevel paraLevel, UBiDiLevel *embeddingLevels,
               UErrorCode *pErrorCode);
 
@@ -1331,7 +1495,32 @@ ubidi_getDirection(const UBiDi *pBiDi);
  * @stable ICU 4.6
  */
 U_STABLE UBiDiDirection U_EXPORT2
-ubidi_getBaseDirection(const UChar *text,  int32_t length );
+ubidi_getBaseDirection(const UChar *text, int32_t length);
+
+/**
+ * Gets the base direction of the text provided according
+ * to the Unicode Bidirectional Algorithm. The base direction
+ * is derived from the first character in the string with bidirectional
+ * character type L, R, or AL. If the first such character has type L,
+ * <code>UBIDI_LTR</code> is returned. If the first such character has
+ * type R or AL, <code>UBIDI_RTL</code> is returned. If the string does
+ * not contain any character of these types, then
+ * <code>UBIDI_NEUTRAL</code> is returned.
+ *
+ * This is a lightweight function for use when only the base direction
+ * is needed and no further bidi processing of the text is needed.
+ *
+ * @param ut is a pointer to A UText text whose base
+ *             direction is needed.
+ *
+ * @return  <code>UBIDI_LTR</code>, <code>UBIDI_RTL</code>,
+ *          <code>UBIDI_NEUTRAL</code>
+ *
+ * @see UBiDiDirection
+ * @stable 
+ */
+U_CAPI UBiDiDirection U_EXPORT2
+ubidi_getUBaseDirection(UText *ut);
 
 /**
  * Get the pointer to the text.
@@ -1339,6 +1528,8 @@ ubidi_getBaseDirection(const UChar *text,  int32_t length );
  * @param pBiDi is the paragraph or line <code>UBiDi</code> object.
  *
  * @return The pointer to the text that the UBiDi object was created for.
+ *         <strong>Note:</strong> return is only valid if ubidi_setPara() was
+ *         called, otherwise NULL is returned.
  *
  * @see ubidi_setPara
  * @see ubidi_setLine
@@ -1346,6 +1537,21 @@ ubidi_getBaseDirection(const UChar *text,  int32_t length );
  */
 U_STABLE const UChar * U_EXPORT2
 ubidi_getText(const UBiDi *pBiDi);
+
+/**
+ * Get the pointer to the text.
+ *
+ * @param pBiDi is the paragraph or line <code>UBiDi</code> object.
+ *
+ * @return The pointer to the cloned UText that the UBiDi object was created for.
+ *
+ * @see ubidi_setPara
+ * @see ubidi_setUPara
+ * @see ubidi_setLine
+ * @stable 
+ */
+U_CAPI const UText * U_EXPORT2
+ubidi_getUText(const UBiDi *pBiDi);
 
 /**
  * Get the length of the text.
@@ -2150,6 +2356,72 @@ ubidi_writeReordered(UBiDi *pBiDi,
                      UErrorCode *pErrorCode);
 
 /**
+ * Take a <code>UBiDi</code> object containing the reordering
+ * information for a piece of text (one or more paragraphs) set by
+ * <code>ubidi_setPara()</code> or for a line of text set by
+ * <code>ubidi_setLine()</code> and write a reordered string to the
+ * destination buffer.
+ *
+ * This function preserves the integrity of characters with multiple
+ * code units and (optionally) combining characters.
+ * Characters in RTL runs can be replaced by mirror-image characters
+ * in the destination buffer. Note that "real" mirroring has
+ * to be done in a rendering engine by glyph selection
+ * and that for many "mirrored" characters there are no
+ * Unicode characters as mirror-image equivalents.
+ * There are also options to insert or remove Bidi control
+ * characters; see the description of the <code>destSize</code>
+ * and <code>options</code> parameters and of the option bit flags.
+ *
+ * If the <code>UBIDI_INSERT_LRM_FOR_NUMERIC</code> option is set, then
+ * the destination length could be as large as
+ * <code>ubidi_getLength(pBiDi)+2*ubidi_countRuns(pBiDi)</code>. If the
+ * <code>UBIDI_REMOVE_BIDI_CONTROLS</code> option is set, then the
+ * destination length may be less than <code>ubidi_getLength(pBiDi)</code>.
+ * If none of these options is set, then the destination length will be
+ * exactly <code>ubidi_getProcessedLength(pBiDi)</code>.
+ *
+ * @param pBiDi A pointer to a <code>UBiDi</code> object that
+ *              is set by <code>ubidi_setPara()</code> or
+ *              <code>ubidi_setLine()</code> and contains the reordering
+ *              information for the text that it was defined for,
+ *              as well as a pointer to that text.<br><br>
+ *              The text was aliased (only the pointer was stored
+ *              without copying the contents) and must not have been modified
+ *              since the <code>ubidi_setPara()</code> call.
+ *
+ * @param dstUt A pointer to a UText where the reordered text is to be copied.
+ *              <strong>Note:</strong> the UText must be writeble.
+ *
+ * @param options A bit set of options for the reordering that control
+ *                how the reordered text is written.
+ *                The options include mirroring the characters on a code
+ *                point basis and inserting LRM characters, which is used
+ *                especially for transforming visually stored text
+ *                to logically stored text (although this is still an
+ *                imperfect implementation of an "inverse Bidi" algorithm
+ *                because it uses the "forward Bidi" algorithm at its core).
+ *                The available options are:
+ *                <code>#UBIDI_DO_MIRRORING</code>,
+ *                <code>#UBIDI_INSERT_LRM_FOR_NUMERIC</code>,
+ *                <code>#UBIDI_KEEP_BASE_COMBINING</code>,
+ *                <code>#UBIDI_OUTPUT_REVERSE</code>,
+ *                <code>#UBIDI_REMOVE_BIDI_CONTROLS</code>
+ *
+ * @param pErrorCode must be a valid pointer to an error code value.
+ *
+ * @return The length of the output string.
+ *
+ * @see ubidi_getProcessedLength
+ * @stable 
+ */
+U_CAPI int32_t U_EXPORT2
+ubidi_writeUReordered(UBiDi *pBiDi,
+                      UText *dstUt,
+                      uint16_t options,
+                      UErrorCode *pErrorCode);
+
+/**
  * Reverse a Right-To-Left run of Unicode text.
  *
  * This function preserves the integrity of characters with multiple
@@ -2200,6 +2472,52 @@ ubidi_writeReverse(const UChar *src, int32_t srcLength,
                    UChar *dest, int32_t destSize,
                    uint16_t options,
                    UErrorCode *pErrorCode);
+
+/**
+ * Reverse a Right-To-Left run of Unicode text.
+ *
+ * This function preserves the integrity of characters with multiple
+ * code units and (optionally) combining characters.
+ * Characters can be replaced by mirror-image characters
+ * in the destination buffer. Note that "real" mirroring has
+ * to be done in a rendering engine by glyph selection
+ * and that for many "mirrored" characters there are no
+ * Unicode characters as mirror-image equivalents.
+ * There are also options to insert or remove Bidi control
+ * characters.
+ *
+ * This function is the implementation for reversing RTL runs as part
+ * of <code>ubidi_writeReordered()</code>. For detailed descriptions
+ * of the parameters, see there.
+ * Since no Bidi controls are inserted here, the output string length
+ * will never exceed <code>srcLength</code>.
+ *
+ * If the <code>UBIDI_REMOVE_BIDI_CONTROLS</code> option is set, then
+ * the destination length may be less than <code>srcLength</code>. If
+ * this option is not set, then the destination length will be exactly
+ * <code>srcLength</code>.
+ *
+ * @see ubidi_writeReordered
+ *
+ * @param srcUt A pointer to a UText of the RTL run.
+ *
+ * @param dstUt A pointer to a UText where the reordered text is to be copied.
+ *              <strong>Note:</strong> the UText must be writeble.
+ *
+ * @param options A bit set of options for the reordering that control
+ *                how the reordered text is written.
+ *                See the <code>options</code> parameter in <code>ubidi_writeReordered()</code>.
+ *
+ * @param pErrorCode must be a valid pointer to an error code value.
+ *
+ * @return The length of the output string.
+ * @stable 
+ */
+U_CAPI int32_t U_EXPORT2
+ubidi_writeUReverse(UText *srcUt,
+                    UText *dstUt,
+                    uint16_t options,
+                    UErrorCode *pErrorCode);
 
 /*#define BIDI_SAMPLE_CODE*/
 /*@}*/

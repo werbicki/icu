@@ -14,6 +14,8 @@
 *
 *   created on: 1999aug06
 *   created by: Markus W. Scherer, updated by Matitiahu Allouche
+*   modified:   2018-11-22, Paul Werbicki - added UText support
+*
 */
 
 #include "cmemory.h"
@@ -147,7 +149,8 @@ ubidi_setLine(const UBiDi *pParaBiDi,
 
     /* set the values in pLineBiDi from its pParaBiDi parent */
     pLineBiDi->pParaBiDi=NULL;          /* mark unfinished setLine */
-    pLineBiDi->text=pParaBiDi->text+start;
+    pLineBiDi->ut=pParaBiDi->ut;
+    pLineBiDi->utNativeStart=start;
     length=pLineBiDi->length=limit-start;
     pLineBiDi->resultLength=pLineBiDi->originalLength=length;
     pLineBiDi->paraLevel=GET_PARALEVEL(pParaBiDi, start);
@@ -158,13 +161,24 @@ ubidi_setLine(const UBiDi *pParaBiDi,
     pLineBiDi->reorderingOptions=pParaBiDi->reorderingOptions;
     pLineBiDi->controlCount=0;
     if(pParaBiDi->controlCount>0) {
-        int32_t j;
-        for(j=start; j<limit; j++) {
-            if(IS_BIDI_CONTROL_CHAR(pParaBiDi->text[j])) {
+        UText ut = UTEXT_INITIALIZER;
+        utext_clone(&ut, &pParaBiDi->ut, FALSE, TRUE, pErrorCode);
+        if (U_FAILURE(*pErrorCode))
+            return;
+
+        UTEXT_SETNATIVEINDEX(&ut, 0);
+        UChar32 uchar = UTEXT_NEXT32(&ut);
+        int32_t srcNativeIndex = 0; // srcNativeIndex represents native index before code point
+        for (; (uchar != U_SENTINEL) && (srcNativeIndex < length);
+            srcNativeIndex = (int32_t)UTEXT_GETNATIVEINDEX(&ut), uchar = UTEXT_NEXT32(&ut)) {
+            if (IS_BIDI_CONTROL_CHAR(uchar)) {
                 pLineBiDi->controlCount++;
             }
         }
-        pLineBiDi->resultLength-=pLineBiDi->controlCount;
+
+        utext_close(&ut);
+
+        pLineBiDi->resultLength -= pLineBiDi->controlCount;
     }
 
     pLineBiDi->dirProps=pParaBiDi->dirProps+start;
@@ -695,11 +709,15 @@ ubidi_getRuns(UBiDi *pBiDi, UErrorCode *pErrorCode) {
 
     /* handle remove BiDi control characters */
     if(pBiDi->controlCount>0) {
-        int32_t runIndex;
-        const UChar *start=pBiDi->text, *limit=start+pBiDi->length, *pu;
-        for(pu=start; pu<limit; pu++) {
-            if(IS_BIDI_CONTROL_CHAR(*pu)) {
-                runIndex=getRunFromLogicalIndex(pBiDi, (int32_t)(pu-start), pErrorCode);
+        UText *ut=&pBiDi->ut;
+
+        UTEXT_SETNATIVEINDEX(ut, 0);
+        UChar32 uchar = UTEXT_NEXT32(ut);
+        int32_t srcNativeIndex = 0; // srcNativeIndex represents native index before code point
+        for (; (uchar != U_SENTINEL) && (srcNativeIndex < pBiDi->length);
+            srcNativeIndex = (int32_t)UTEXT_GETNATIVEINDEX(ut), uchar = UTEXT_NEXT32(ut)) {
+            if (IS_BIDI_CONTROL_CHAR(uchar)) {
+                int32_t runIndex = getRunFromLogicalIndex(pBiDi, srcNativeIndex, pErrorCode);
                 pBiDi->runs[runIndex].insertRemove--;
             }
         }
@@ -941,13 +959,18 @@ ubidi_getVisualIndex(UBiDi *pBiDi, int32_t logicalIndex, UErrorCode *pErrorCode)
     else if(pBiDi->controlCount>0) {
         /* subtract the number of controls until the calculated visual index */
         Run *runs=pBiDi->runs;
-        int32_t i, j, start, limit, length, insertRemove;
+        int32_t i, start, limit, length, insertRemove;
         int32_t visualStart=0, controlFound=0;
-        UChar uchar=pBiDi->text[logicalIndex];
-        /* is the logical index pointing to a control ? */
+
+        UText *ut = &pBiDi->ut;
+        int64_t srcNativeIndex = UTEXT_GETNATIVEINDEX(ut);
+        UChar32 uchar = utext_char32At(ut, logicalIndex);
+
+        // Is the logical index pointing to a control?
         if(IS_BIDI_CONTROL_CHAR(uchar)) {
             return UBIDI_MAP_NOWHERE;
         }
+
         /* loop on runs */
         for(i=0; ; i++, visualStart+=length) {
             length=runs[i].visualLimit-visualStart;
@@ -970,12 +993,17 @@ ubidi_getVisualIndex(UBiDi *pBiDi, int32_t logicalIndex, UErrorCode *pErrorCode)
                 start=logicalIndex+1;
                 limit=GET_INDEX(runs[i].logicalStart)+length;
             }
-            for(j=start; j<limit; j++) {
-                uchar=pBiDi->text[j];
+
+            UTEXT_SETNATIVEINDEX(ut, start);
+            uchar = UTEXT_NEXT32(ut);
+            srcNativeIndex = start; // srcNativeIndex represents native index before code point
+            for (; (uchar != U_SENTINEL) && (srcNativeIndex < limit);
+                srcNativeIndex = (int32_t)UTEXT_GETNATIVEINDEX(ut), uchar = UTEXT_NEXT32(ut)) {
                 if(IS_BIDI_CONTROL_CHAR(uchar)) {
                     controlFound++;
                 }
             }
+
             return visualIndex-controlFound;
         }
     }
@@ -1037,8 +1065,7 @@ ubidi_getLogicalIndex(UBiDi *pBiDi, int32_t visualIndex, UErrorCode *pErrorCode)
     else if(pBiDi->controlCount>0) {
         /* handle removed BiDi control characters */
         int32_t controlFound=0, insertRemove, length;
-        int32_t logicalStart, logicalEnd, visualStart=0, j, k;
-        UChar uchar;
+        int32_t logicalStart, logicalEnd, visualStart=0;
         UBool evenRun;
         /* add number of controls until visual index */
         for(i=0; ; i++, visualStart+=length) {
@@ -1059,16 +1086,38 @@ ubidi_getLogicalIndex(UBiDi *pBiDi, int32_t visualIndex, UErrorCode *pErrorCode)
             evenRun=IS_EVEN_RUN(logicalStart);
             REMOVE_ODD_BIT(logicalStart);
             logicalEnd=logicalStart+length-1;
-            for(j=0; j<length; j++) {
-                k= evenRun ? logicalStart+j : logicalEnd-j;
-                uchar=pBiDi->text[k];
-                if(IS_BIDI_CONTROL_CHAR(uchar)) {
+
+            UText *ut = &pBiDi->ut;
+            int32_t srcNativeIndex;
+            UChar32 uchar;
+            if (evenRun) {
+                UTEXT_SETNATIVEINDEX(ut, logicalStart);
+                srcNativeIndex = logicalStart;
+                uchar = UTEXT_NEXT32(ut);
+            }
+            else {
+                UTEXT_SETNATIVEINDEX(ut, logicalEnd);
+                srcNativeIndex = logicalEnd;
+                uchar = UTEXT_CURRENT32(ut);
+            }
+            for (; (uchar != U_SENTINEL) && ((evenRun ? srcNativeIndex - logicalStart : logicalEnd - srcNativeIndex) < length); ) {
+                if (IS_BIDI_CONTROL_CHAR(uchar)) {
                     controlFound++;
                 }
-                if((visualIndex+controlFound)==(visualStart+j)) {
+                if ((visualIndex + controlFound) == (visualStart + (evenRun ? srcNativeIndex - logicalStart : logicalEnd - srcNativeIndex))) {
                     break;
                 }
+
+                if (evenRun) {
+                    srcNativeIndex = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+                    uchar = UTEXT_NEXT32(ut);
+                }
+                else {
+                    uchar = UTEXT_PREVIOUS32(ut);
+                    srcNativeIndex = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+                }
             }
+
             visualIndex+=controlFound;
             break;
         }
@@ -1120,7 +1169,7 @@ ubidi_getLogicalMap(UBiDi *pBiDi, int32_t *indexMap, UErrorCode *pErrorCode) {
     } else {
         /* fill a logical-to-visual index map using the runs[] */
         int32_t visualStart, visualLimit, i, j, k;
-        int32_t logicalStart, logicalLimit;
+        int32_t logicalStart, logicalEnd;
         Run *runs=pBiDi->runs;
         if (pBiDi->length<=0) {
             return;
@@ -1159,8 +1208,8 @@ ubidi_getLogicalMap(UBiDi *pBiDi, int32_t *indexMap, UErrorCode *pErrorCode) {
                 }
                 if(markFound>0) {
                     logicalStart=GET_INDEX(runs[i].logicalStart);
-                    logicalLimit=logicalStart+length;
-                    for(j=logicalStart; j<logicalLimit; j++) {
+                    logicalEnd=logicalStart+length;
+                    for(j=logicalStart; j<logicalEnd; j++) {
                         indexMap[j]+=markFound;
                     }
                 }
@@ -1173,7 +1222,6 @@ ubidi_getLogicalMap(UBiDi *pBiDi, int32_t *indexMap, UErrorCode *pErrorCode) {
             int32_t controlFound=0, runCount=pBiDi->runCount;
             int32_t length, insertRemove;
             UBool evenRun;
-            UChar uchar;
             visualStart=0;
             /* subtract number of controls found until each index */
             for(i=0; i<runCount; i++, visualStart+=length) {
@@ -1186,23 +1234,52 @@ ubidi_getLogicalMap(UBiDi *pBiDi, int32_t *indexMap, UErrorCode *pErrorCode) {
                 logicalStart=runs[i].logicalStart;
                 evenRun=IS_EVEN_RUN(logicalStart);
                 REMOVE_ODD_BIT(logicalStart);
-                logicalLimit=logicalStart+length;
+                logicalEnd=logicalStart+length-1;
                 /* if no control within this run */
                 if(insertRemove==0) {
-                    for(j=logicalStart; j<logicalLimit; j++) {
+                    for(j=logicalStart; j<logicalEnd+1; j++) {
                         indexMap[j]-=controlFound;
                     }
                     continue;
                 }
-                for(j=0; j<length; j++) {
-                    k= evenRun ? logicalStart+j : logicalLimit-j-1;
-                    uchar=pBiDi->text[k];
-                    if(IS_BIDI_CONTROL_CHAR(uchar)) {
+
+                UText *ut = &pBiDi->ut;
+                int32_t srcNativeIndex;
+                UChar32 uchar;
+                UBool controlChar;
+                if (evenRun) {
+                    UTEXT_SETNATIVEINDEX(ut, logicalStart);
+                    srcNativeIndex = logicalStart;
+                    uchar = UTEXT_NEXT32(ut);
+                }
+                else {
+                    UTEXT_SETNATIVEINDEX(ut, logicalEnd);
+                    srcNativeIndex = logicalEnd;
+                    uchar = UTEXT_CURRENT32(ut);
+                }
+                for (; (uchar != U_SENTINEL) && ((evenRun ? srcNativeIndex - logicalStart : logicalEnd - srcNativeIndex) < length); ) {
+                    k = srcNativeIndex;
+                    if (IS_BIDI_CONTROL_CHAR(uchar)) {
                         controlFound++;
-                        indexMap[k]=UBIDI_MAP_NOWHERE;
-                        continue;
+                        indexMap[k] = UBIDI_MAP_NOWHERE;
+                        controlChar = TRUE;
                     }
-                    indexMap[k]-=controlFound;
+                    else {
+                        controlChar = FALSE;
+                    }
+
+                    if (evenRun) {
+                        srcNativeIndex = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+                        uchar = UTEXT_NEXT32(ut);
+                    }
+                    else {
+                        uchar = UTEXT_PREVIOUS32(ut);
+                        srcNativeIndex = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+                    }
+
+                    if (!controlChar) {
+                        indexMap[k] -= controlFound;
+                    }
                 }
             }
         }
@@ -1278,8 +1355,7 @@ ubidi_getVisualMap(UBiDi *pBiDi, int32_t *indexMap, UErrorCode *pErrorCode) {
         }
         else if(pBiDi->controlCount>0) {
             int32_t runCount=pBiDi->runCount, logicalEnd;
-            int32_t insertRemove, length, i, j, k, m;
-            UChar uchar;
+            int32_t insertRemove, length, i, j, k;
             UBool evenRun;
             runs=pBiDi->runs;
             visualStart=0;
@@ -1305,11 +1381,32 @@ ubidi_getVisualMap(UBiDi *pBiDi, int32_t *indexMap, UErrorCode *pErrorCode) {
                 evenRun=IS_EVEN_RUN(logicalStart);
                 REMOVE_ODD_BIT(logicalStart);
                 logicalEnd=logicalStart+length-1;
-                for(j=0; j<length; j++) {
-                    m= evenRun ? logicalStart+j : logicalEnd-j;
-                    uchar=pBiDi->text[m];
-                    if(!IS_BIDI_CONTROL_CHAR(uchar)) {
-                        indexMap[k++]=m;
+
+                UText *ut = &pBiDi->ut;
+                int32_t srcNativeIndex;
+                UChar32 uchar;
+                if (evenRun) {
+                    UTEXT_SETNATIVEINDEX(ut, logicalStart);
+                    srcNativeIndex = logicalStart;
+                    uchar = UTEXT_NEXT32(ut);
+                }
+                else {
+                    UTEXT_SETNATIVEINDEX(ut, logicalEnd);
+                    srcNativeIndex = logicalEnd;
+                    uchar = UTEXT_CURRENT32(ut);
+                }
+                for (; (uchar != U_SENTINEL) && ((evenRun ? srcNativeIndex - logicalStart : logicalEnd - srcNativeIndex) < length); ) {
+                    if (!IS_BIDI_CONTROL_CHAR(uchar)) {
+                        indexMap[k++] = srcNativeIndex;
+                    }
+
+                    if (evenRun) {
+                        srcNativeIndex = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+                        uchar = UTEXT_NEXT32(ut);
+                    }
+                    else {
+                        uchar = UTEXT_PREVIOUS32(ut);
+                        srcNativeIndex = (int32_t)UTEXT_GETNATIVEINDEX(ut);
                     }
                 }
             }
