@@ -1687,7 +1687,7 @@ utext_setup(UText *ut, int32_t extraSpace, UErrorCode *status);
  * @stable ICU 3.4
  */
 U_STABLE UText * U_EXPORT2
-utext_shallowClone(UText *dest, const UText *src, UErrorCode* status)
+utext_shallowClone(UText *dest, const UText *src, UErrorCode* status);
 
 #ifndef U_HIDE_INTERNAL_API
 

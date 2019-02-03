@@ -63,7 +63,7 @@ enum UEncoding {
 // Quick and dirty random number generator.
 // Don't use library so that results are portable and predictable.
 static uint32_t m_seed = 1;
-static uint32_t m_rand()
+inline static uint32_t m_rand(void)
 {
     m_seed = m_seed * 1103515245 + 12345;
     return (uint32_t)(m_seed / 65536) % 32768;
@@ -141,7 +141,6 @@ static int32_t BuildU16Map(
 // Build up a mapping between code points and UTF-32 code unit indexes.
 static void BuildU32Map(
     const UChar32* u32String,
-    int32_t u32Len,
     int32_t cpCount,
     int32_t* u32NativeIdx,
     UChar32* u32Map
@@ -614,7 +613,7 @@ static void TestCopyAPI(UText* ut, int32_t i, int32_t length)
 
     TEST_ASSERT(status == testCasesUTextCopy[i].errorCode);
     if (status != testCasesUTextCopy[i].errorCode)
-        log_err("\utext_copy(testCase[%d]): ErrorCode is wrong, expected %s, got %s\n", i, u_errorName(testCasesUTextCopy[i].errorCode), u_errorName(status));
+        log_err("\nutext_copy(testCase[%d]): ErrorCode is wrong, expected %s, got %s\n", i, u_errorName(testCasesUTextCopy[i].errorCode), u_errorName(status));
 
     int32_t index = 0;
     if (!U_FAILURE(status))
@@ -647,7 +646,7 @@ static void TestCopyAPI(UText* ut, int32_t i, int32_t length)
     int32_t utPos = (int32_t)utext_getNativeIndex(ut);
     TEST_ASSERT(utPos == index);
     if (utPos != index)
-        log_err("\utext_copy(testCase[%d]): Iterator index is wrong, expected %d, got %d\n", i, index, utPos);
+        log_err("\nutext_copy(testCase[%d]): Iterator index is wrong, expected %d, got %d\n", i, index, utPos);
 
     if (testCasesUTextCopy[i].u8Out)
     {
@@ -661,7 +660,7 @@ static void TestCopyAPI(UText* ut, int32_t i, int32_t length)
 
         TEST_ASSERT(u_strcmp(u16Buf, u16BufOut) == 0);
         if (u_strcmp(u16Buf, u16BufOut) != 0) {
-            ucnv_fromUChars(u16Convertor, u8Buf, sizeof(u8Buf), u16Buf, -1, &status);
+            ucnv_fromUChars(u16Convertor, (char*)u8Buf, sizeof(u8Buf), u16Buf, -1, &status);
             log_err("\nutext_copy(testCase[%d]): Result is wrong, expected '%s', got '%s'\n", i, testCasesUTextCopy[i].u8Out, u8Buf);
         }
     }
@@ -669,11 +668,11 @@ static void TestCopyAPI(UText* ut, int32_t i, int32_t length)
     ucnv_close(u16Convertor);
 }
 
-void TestAccess(UText *ut, const UChar* u16String, int32_t u16Len, int32_t cpCount, int32_t* cpNativeIdx, UChar32* cpMap)
+void TestAccess(UText *ut, int32_t cpCount, int32_t* cpNativeIdx, UChar32* cpMap)
 {
     gTestNum++;
     gFailed = FALSE;
-    UErrorCode status = U_ZERO_ERROR;
+    //UErrorCode status = U_ZERO_ERROR;
 
     //
     //  Check the length from the UText
@@ -884,8 +883,7 @@ void TestExtract(
     const UChar* u16String,
     int32_t u16Len,
     int32_t cpCount,
-    int32_t* cpNativeIdx,
-    UChar32* cpMap
+    int32_t* cpNativeIdx
 )
 {
     gTestNum++;
@@ -1368,7 +1366,7 @@ static void TestAPI(void)
         UErrorCode status = U_ZERO_ERROR;
         UText ut = UTEXT_INITIALIZER;
         const char *s = "Hello, World";
-        UText *ut2 = utext_openConstU8(&ut, s, -1, -1, &status);
+        UText *ut2 = utext_openConstU8(&ut, (const uint8_t*)s, -1, -1, &status);
         TEST_SUCCESS(status);
         TEST_ASSERT(ut2 == &ut);
 
@@ -1378,7 +1376,7 @@ static void TestAPI(void)
         UText *ut4 = utext_close(&ut);
         TEST_ASSERT(ut4 == &ut);
 
-        utext_openConstU8(&ut, s, -1, -1, &status);
+        utext_openConstU8(&ut, (const uint8_t*)s, -1, -1, &status);
         TEST_SUCCESS(status);
         utext_close(&ut);
     }
@@ -1394,7 +1392,7 @@ static void TestAPI(void)
         UChar s2[] = { (UChar)0x41, (UChar)0x42, (UChar)0 };
         UChar32 s3[] = { (UChar32)0x41, (UChar32)0x42, (UChar32)0 };
 
-        utp = utext_openConstU8(&ut, s1, -1, -1, &status);
+        utp = utext_openConstU8(&ut, (const uint8_t*)s1, -1, -1, &status);
         TEST_SUCCESS(status);
         TEST_ASSERT(utp == &ut);
 
@@ -1409,7 +1407,7 @@ static void TestAPI(void)
         utp = utext_close(&ut);
         TEST_ASSERT(utp == &ut);
 
-        utp = utext_openConstU8(&ut, s, -1, -1, &status);
+        utp = utext_openConstU8(&ut, (const uint8_t*)s, -1, -1, &status);
         TEST_SUCCESS(status);
         TEST_ASSERT(utp == &ut);
     }
@@ -1447,7 +1445,7 @@ static void TestU8(void)
 
             if (testCasesUTextAccess[i].u8In)
             {
-                u8InLenBefore = (int32_t)strlen(strcpy(u8BufIn, testCasesUTextAccess[i].u8In));
+                u8InLenBefore = (int32_t)strlen(strcpy((char*)u8BufIn, testCasesUTextAccess[i].u8In));
 
                 u8In = u8BufIn;
                 if (testCasesUTextAccess[i].u8InLen == -1)
@@ -1529,7 +1527,7 @@ static void TestU8(void)
 
             if (testCasesUTextExtract[i].u8In)
             {
-                u8InLenBefore = (int32_t)strlen(strcpy(u8BufIn, testCasesUTextExtract[i].u8In));
+                u8InLenBefore = (int32_t)strlen(strcpy((char*)u8BufIn, testCasesUTextExtract[i].u8In));
 
                 u8In = u8BufIn;
                 if (testCasesUTextExtract[i].u8InLen == -1)
@@ -1611,7 +1609,7 @@ static void TestU8(void)
 
             if (testCasesUTextReplace[i].u8In)
             {
-                u8InLenBefore = (int32_t)strlen(strcpy(u8BufIn, testCasesUTextReplace[i].u8In));
+                u8InLenBefore = (int32_t)strlen(strcpy((char*)u8BufIn, testCasesUTextReplace[i].u8In));
 
                 u8In = u8BufIn;
                 if (testCasesUTextReplace[i].u8InLen == -1)
@@ -1659,7 +1657,7 @@ static void TestU8(void)
 
             if (testCasesUTextCopy[i].u8In)
             {
-                u8InLenBefore = (int32_t)strlen(strcpy(u8BufIn, testCasesUTextCopy[i].u8In));
+                u8InLenBefore = (int32_t)strlen(strcpy((char*)u8BufIn, testCasesUTextCopy[i].u8In));
 
                 u8In = u8BufIn;
                 if (testCasesUTextCopy[i].u8InLen == -1)
@@ -1696,12 +1694,12 @@ static void TestU8(void)
         {
             uint8_t u8Buf[BUFFER_SIZE + sizeof(void *)];
             memset(u8Buf, 0, sizeof(u8Buf));
-            strcpy(u8Buf, testCasesTestString[i].u8In);
+            strcpy((char*)u8Buf, testCasesTestString[i].u8In);
             int32_t u8Len = (int32_t)strlen(testCasesTestString[i].u8In);
 
             UChar u16Buf[BUFFER_SIZE + sizeof(void *)];
             u_memset(u16Buf, 0, sizeof(u16Buf) / sizeof(UChar));
-            int32_t u16Len = ucnv_toUChars(u16Convertor, u16Buf, sizeof(u16Buf), u8Buf, -1, &status);
+            int32_t u16Len = ucnv_toUChars(u16Convertor, u16Buf, sizeof(u16Buf), (const char*)u8Buf, -1, &status);
 
             int32_t u16NativeIdx[BUFFER_SIZE + sizeof(void *)];
             UChar32 u16Map[BUFFER_SIZE + sizeof(void *)];
@@ -1718,8 +1716,8 @@ static void TestU8(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestAccess(ut, u16Buf, u16Len, cpCount, u8NativeIdx, u8Map);
-                TestExtract(ut, u16Buf, u16Len, cpCount, u8NativeIdx, u8Map);
+                TestAccess(ut, cpCount, u8NativeIdx, u8Map);
+                TestExtract(ut, u16Buf, u16Len, cpCount, u8NativeIdx);
                 TestCMR(ut, u16Buf, u16Len, cpCount, u8NativeIdx, u16NativeIdx, fullRepString, UEncoding_U8);
                 TestFreeze(ut);
 
@@ -1747,7 +1745,7 @@ static void TestU8(void)
 
             UChar u16Buf[BUFFER_SIZE + sizeof(void *)];
             u_memset(u16Buf, 0, sizeof(u16Buf) / sizeof(UChar));
-            int32_t u16Len = ucnv_toUChars(u16Convertor, u16Buf, sizeof(u16Buf), u8Buf, u8Len, &status);
+            int32_t u16Len = ucnv_toUChars(u16Convertor, u16Buf, sizeof(u16Buf), (const char*)u8Buf, u8Len, &status);
 
             int32_t u16NativeIdx[BUFFER_SIZE + sizeof(void *)];
             UChar32 u16Map[BUFFER_SIZE + sizeof(void *)];
@@ -1764,8 +1762,8 @@ static void TestU8(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestAccess(ut, u16Buf, u16Len, cpCount, u8NativeIdx, u8Map);
-                TestExtract(ut, u16Buf, u16Len, cpCount, u8NativeIdx, u8Map);
+                TestAccess(ut, cpCount, u8NativeIdx, u8Map);
+                TestExtract(ut, u16Buf, u16Len, cpCount, u8NativeIdx);
                 TestCMR(ut, u16Buf, u16Len, cpCount, u8NativeIdx, u16NativeIdx, fullRepString, UEncoding_U8);
                 TestFreeze(ut);
 
@@ -1790,7 +1788,7 @@ static void TestU8(void)
 
             UChar u16Buf[BUFFER_SIZE + sizeof(void *)];
             u_memset(u16Buf, 0, sizeof(u16Buf) / sizeof(UChar));
-            int32_t u16Len = ucnv_toUChars(u16Convertor, u16Buf, sizeof(u16Buf), u8Buf, u8Len, &status);
+            int32_t u16Len = ucnv_toUChars(u16Convertor, u16Buf, sizeof(u16Buf), (const char*)u8Buf, u8Len, &status);
 
             int32_t u16NativeIdx[BUFFER_SIZE + sizeof(void *)];
             UChar32 u16Map[BUFFER_SIZE + sizeof(void *)];
@@ -1807,8 +1805,8 @@ static void TestU8(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestAccess(ut, u16Buf, u16Len, cpCount, u8NativeIdx, u8Map);
-                TestExtract(ut, u16Buf, u16Len, cpCount, u8NativeIdx, u8Map);
+                TestAccess(ut, cpCount, u8NativeIdx, u8Map);
+                TestExtract(ut, u16Buf, u16Len, cpCount, u8NativeIdx);
                 TestCMR(ut, u16Buf, u16Len, cpCount, u8NativeIdx, u16NativeIdx, fullRepString, UEncoding_U8);
                 TestFreeze(ut);
 
@@ -1855,7 +1853,7 @@ static void TestU8(void)
 
             UChar u16Buf[5000 + sizeof(void *)];
             u_memset(u16Buf, 0, sizeof(u16Buf) / sizeof(UChar));
-            int32_t u16Len = ucnv_toUChars(u16Convertor, u16Buf, sizeof(u16Buf), u8Buf, u8Len, &status);
+            int32_t u16Len = ucnv_toUChars(u16Convertor, u16Buf, sizeof(u16Buf), (const char*)u8Buf, u8Len, &status);
 
             int32_t u16NativeIdx[5000 + sizeof(void *) / sizeof(int)];
             UChar32 u16Map[5000 + sizeof(void *) / sizeof(UChar32)];
@@ -1872,8 +1870,8 @@ static void TestU8(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestAccess(ut, u16Buf, u16Len, cpCount, u8NativeIdx, u8Map);
-                TestExtract(ut, u16Buf, u16Len, cpCount, u8NativeIdx, u8Map);
+                TestAccess(ut, cpCount, u8NativeIdx, u8Map);
+                TestExtract(ut, u16Buf, u16Len, cpCount, u8NativeIdx);
 
                 // TestReplace/TestCopyMove use a stack buffer of only BUFFER_SIZE
                 if (u8Len < BUFFER_SIZE)
@@ -1898,12 +1896,12 @@ static void TestU8(void)
             //  is zero when both index positions lie within the same code point.
             int32_t  exLen[] = { 0,  1,   0,  0,  1,  0,  0,  0,  2,  0,  0 };
 
-            UText *ut = utext_openConstU8(NULL, u8str, -1, -1, &status);
+            UText *ut = utext_openConstU8(NULL, (const uint8_t*)u8str, -1, -1, &status);
             TEST_SUCCESS(status);
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                static void TestNotOnCodePoints(
+                TestNotOnCodePoints(
                     ut,
                     startMap,
                     nextMap,
@@ -1923,7 +1921,7 @@ static void TestU8(void)
             const char *badUTF8 = "\x41\x81\x42\xf0\x81\x81\x43";
             UChar32  c;
 
-            UText *ut = utext_openConstU8(NULL, badUTF8, -1, -1, &status);
+            UText *ut = utext_openConstU8(NULL, (const uint8_t*)badUTF8, -1, -1, &status);
             TEST_SUCCESS(status);
             c = utext_char32At(ut, 1);
             TEST_ASSERT(c == 0xfffd);
@@ -2238,12 +2236,11 @@ static void TestU16(void)
         {
             uint8_t u8Buf[BUFFER_SIZE + sizeof(void *)];
             memset(u8Buf, 0, sizeof(u8Buf));
-            strcpy(u8Buf, testCasesTestString[i].u8In);
-            int32_t u8Len = (int32_t)strlen(testCasesTestString[i].u8In);
+            strcpy((char*)u8Buf, testCasesTestString[i].u8In);
 
             UChar u16Buf[BUFFER_SIZE + sizeof(void *)];
             u_memset(u16Buf, 0, sizeof(u16Buf) / sizeof(UChar));
-            int32_t u16Len = ucnv_toUChars(u16Convertor, u16Buf, sizeof(u16Buf), u8Buf, -1, &status);
+            int32_t u16Len = ucnv_toUChars(u16Convertor, u16Buf, sizeof(u16Buf), (const char*)u8Buf, -1, &status);
 
             int32_t u16NativeIdx[BUFFER_SIZE + sizeof(void *)];
             UChar32 u16Map[BUFFER_SIZE + sizeof(void *)];
@@ -2256,8 +2253,8 @@ static void TestU16(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestAccess(ut, u16Buf, u16Len, cpCount, u16NativeIdx, u16Map);
-                TestExtract(ut, u16Buf, u16Len, cpCount, u16NativeIdx, u16Map);
+                TestAccess(ut, cpCount, u16NativeIdx, u16Map);
+                TestExtract(ut, u16Buf, u16Len, cpCount, u16NativeIdx);
                 TestCMR(ut, u16Buf, u16Len, cpCount, u16NativeIdx, u16NativeIdx, fullRepString, UEncoding_U16);
                 TestFreeze(ut);
 
@@ -2274,12 +2271,15 @@ static void TestU16(void)
 
             int32_t u16Len = 0;
             UBool isError = FALSE;
+            int32_t k;
             for (int32_t j = 0; j < i; j++) {
                 if (j + 0x30 == 0x5c) {
                     // Backslash. Needs to be escaped.
-                    U16_APPEND(u16Buf, u16Len, BUFFER_SIZE, (UChar32)0x5c, isError);
+                    k = (UChar32)0x5c;
+                    U16_APPEND(u16Buf, u16Len, BUFFER_SIZE, k, isError);
                 }
-                U16_APPEND(u16Buf, u16Len, BUFFER_SIZE, (UChar32)(j + 0x30), isError);
+                k = (UChar32)(j + 0x30);
+                U16_APPEND(u16Buf, u16Len, BUFFER_SIZE, k, isError);
             }
             u16Buf[u16Len] = 0;
 
@@ -2294,8 +2294,8 @@ static void TestU16(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestAccess(ut, u16Buf, u16Len, cpCount, u16NativeIdx, u16Map);
-                TestExtract(ut, u16Buf, u16Len, cpCount, u16NativeIdx, u16Map);
+                TestAccess(ut, cpCount, u16NativeIdx, u16Map);
+                TestExtract(ut, u16Buf, u16Len, cpCount, u16NativeIdx);
                 TestCMR(ut, u16Buf, u16Len, cpCount, u16NativeIdx, u16NativeIdx, fullRepString, UEncoding_U16);
                 TestFreeze(ut);
 
@@ -2312,9 +2312,11 @@ static void TestU16(void)
 
             int32_t u16Len = 0;
             UBool isError = FALSE;
-            U16_APPEND(u16Buf, u16Len, BUFFER_SIZE, (UChar32)0x41, isError);
+            int32_t k = (UChar32)0x41;
+            U16_APPEND(u16Buf, u16Len, BUFFER_SIZE, k, isError);
             for (int32_t j = 0; j < i; j++) {
-                U16_APPEND(u16Buf, u16Len, BUFFER_SIZE, (UChar32)(j + 0x11000), isError);
+                k = (UChar32)(j + 0x11000);
+                U16_APPEND(u16Buf, u16Len, BUFFER_SIZE, k, isError);
             }
             u16Buf[u16Len] = 0;
 
@@ -2329,8 +2331,8 @@ static void TestU16(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestAccess(ut, u16Buf, u16Len, cpCount, u16NativeIdx, u16Map);
-                TestExtract(ut, u16Buf, u16Len, cpCount, u16NativeIdx, u16Map);
+                TestAccess(ut, cpCount, u16NativeIdx, u16Map);
+                TestExtract(ut, u16Buf, u16Len, cpCount, u16NativeIdx);
                 TestCMR(ut, u16Buf, u16Len, cpCount, u16NativeIdx, u16NativeIdx, fullRepString, UEncoding_U16);
                 TestFreeze(ut);
 
@@ -2357,7 +2359,7 @@ static void TestU16(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                static void TestNotOnCodePoints(
+                TestNotOnCodePoints(
                     ut,
                     startMap,
                     nextMap,
@@ -2696,8 +2698,7 @@ static void TestU32(void)
         {
             uint8_t u8Buf[BUFFER_SIZE + sizeof(void *)];
             memset(u8Buf, 0, sizeof(u8Buf));
-            strcpy(u8Buf, testCasesTestString[i].u8In);
-            int32_t u8Len = (int32_t)strlen(testCasesTestString[i].u8In);
+            strcpy((char*)u8Buf, testCasesTestString[i].u8In);
 
             UChar32 u32BufIn[BUFFER_SIZE + sizeof(void *)];
             memset(u32BufIn, 0, sizeof(u32BufIn));
@@ -2717,7 +2718,7 @@ static void TestU32(void)
 
             int32_t u32NativeIdx[BUFFER_SIZE + sizeof(void *)];
             UChar32 u32Map[BUFFER_SIZE + sizeof(void *)];
-            BuildU32Map(u32Buf, u32Len, cpCount, u32NativeIdx, u32Map);
+            BuildU32Map(u32Buf, cpCount, u32NativeIdx, u32Map);
 
             status = U_ZERO_ERROR;
 
@@ -2726,8 +2727,8 @@ static void TestU32(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestAccess(ut, u16Buf, u16Len, cpCount, u32NativeIdx, u32Map);
-                TestExtract(ut, u16Buf, u16Len, cpCount, u32NativeIdx, u32Map);
+                TestAccess(ut, cpCount, u32NativeIdx, u32Map);
+                TestExtract(ut, u16Buf, u16Len, cpCount, u32NativeIdx);
                 TestCMR(ut, u16Buf, u16Len, cpCount, u32NativeIdx, u16NativeIdx, fullRepString, UEncoding_U32);
                 TestFreeze(ut);
 
@@ -2754,7 +2755,6 @@ static void TestU32(void)
             u32Buf[u32Len] = 0;
             u32BufIn[0] = 0x0000FEFF;
 
-            UChar u16Buf[BUFFER_SIZE + sizeof(void *)];
             u_memset(u16Buf, 0, sizeof(u16Buf) / sizeof(UChar));
             int32_t u16Len = ucnv_toUChars(u32Convertor, u16Buf, sizeof(u16Buf), (const char *)u32BufIn, (u32Len + 1) * sizeof(UChar32), &status);
 
@@ -2764,7 +2764,7 @@ static void TestU32(void)
 
             int32_t u32NativeIdx[BUFFER_SIZE + sizeof(void *)];
             UChar32 u32Map[BUFFER_SIZE + sizeof(void *)];
-            BuildU32Map(u32Buf, u32Len, cpCount, u32NativeIdx, u32Map);
+            BuildU32Map(u32Buf, cpCount, u32NativeIdx, u32Map);
 
             status = U_ZERO_ERROR;
 
@@ -2773,8 +2773,8 @@ static void TestU32(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestAccess(ut, u16Buf, u16Len, cpCount, u32NativeIdx, u32Map);
-                TestExtract(ut, u16Buf, u16Len, cpCount, u32NativeIdx, u32Map);
+                TestAccess(ut, cpCount, u32NativeIdx, u32Map);
+                TestExtract(ut, u16Buf, u16Len, cpCount, u32NativeIdx);
                 TestCMR(ut, u16Buf, u16Len, cpCount, u32NativeIdx, u16NativeIdx, fullRepString, UEncoding_U32);
                 TestFreeze(ut);
 
@@ -2798,7 +2798,6 @@ static void TestU32(void)
             u32Buf[u32Len] = 0;
             u32BufIn[0] = 0x0000FEFF;
 
-            UChar u16Buf[BUFFER_SIZE + sizeof(void *)];
             u_memset(u16Buf, 0, sizeof(u16Buf) / sizeof(UChar));
             int32_t u16Len = ucnv_toUChars(u32Convertor, u16Buf, sizeof(u16Buf), (const char *)u32BufIn, (u32Len + 1) * sizeof(UChar32), &status);
 
@@ -2808,7 +2807,7 @@ static void TestU32(void)
 
             int32_t u32NativeIdx[BUFFER_SIZE + sizeof(void *)];
             UChar32 u32Map[BUFFER_SIZE + sizeof(void *)];
-            BuildU32Map(u32Buf, u32Len, cpCount, u32NativeIdx, u32Map);
+            BuildU32Map(u32Buf, cpCount, u32NativeIdx, u32Map);
 
             status = U_ZERO_ERROR;
 
@@ -2817,8 +2816,8 @@ static void TestU32(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestAccess(ut, u16Buf, u16Len, cpCount, u32NativeIdx, u32Map);
-                TestExtract(ut, u16Buf, u16Len, cpCount, u32NativeIdx, u32Map);
+                TestAccess(ut, cpCount, u32NativeIdx, u32Map);
+                TestExtract(ut, u16Buf, u16Len, cpCount, u32NativeIdx);
                 TestCMR(ut, u16Buf, u16Len, cpCount, u32NativeIdx, u16NativeIdx, fullRepString, UEncoding_U32);
                 TestFreeze(ut);
 
