@@ -968,9 +968,9 @@ void TestReplace(
     u_memset(u16Buf, 0, sizeof(u16Buf) / sizeof(UChar));
 
     // Do the replace operation in the buffer, to produce a reference result.
-    u_memcpy(u16Buf, u16String, u16Start);
-    u_memcpy(&u16Buf[u16Start], u16RepString, u16RepLen);
-    u_memcpy(&u16Buf[u16Start + u16RepLen], &u16String[u16Limit], (u16Len + u16RepLen) - (u16Start + u16RepLen));
+    u_strncpy(u16Buf, u16String, u16Start);
+    u_strncpy(&u16Buf[u16Start], u16RepString, u16RepLen);
+    u_strncpy(&u16Buf[u16Start + u16RepLen], &u16String[u16Limit], (u16Len + u16RepLen) - (u16Start + u16RepLen));
     u16Buf[u16Len + u16RepLen] = 0;
 
     // Clone the target UText.  The test will be run in the cloned copy
@@ -1055,15 +1055,15 @@ void TestCopyMove(
     u_memset(u16Buf, 0, sizeof(u16Buf) / sizeof(UChar));
 
     // Do the copy/move operation in the buffer, to produce a reference result.
-    u_memcpy(u16Buf, u16String, u16Dest);
-    u_memcpy(&u16Buf[u16Dest], &u16String[u16Start], u16Limit - u16Start);
-    u_memcpy(&u16Buf[u16Dest + (u16Limit - u16Start)], &u16String[u16Dest], (u16Len + u16RepLen) - u16Dest);
+    u_strncpy(u16Buf, u16String, u16Dest);
+    u_strncpy(&u16Buf[u16Dest], &u16String[u16Start], u16Limit - u16Start);
+    u_strncpy(&u16Buf[u16Dest + (u16Limit - u16Start)], &u16String[u16Dest], (u16Len + u16RepLen) - u16Dest);
     if (move) {
         if (u16Start <= u16Dest) {
-            u_memcpy(&u16Buf[u16Start], &u16Buf[u16Limit], (u16Len + (u16Limit - u16Start)) - u16Limit);
+            u_strncpy(&u16Buf[u16Start], &u16Buf[u16Limit], (u16Len + (u16Limit - u16Start)) - u16Limit);
         }
         else {
-            u_memcpy(&u16Buf[u16Start + (u16Limit - u16Start)], &u16Buf[u16Limit + (u16Limit - u16Start)], (u16Len + u16RepLen) - (u16Start + u16Limit - u16Start));
+            u_strncpy(&u16Buf[u16Start + (u16Limit - u16Start)], &u16Buf[u16Limit + (u16Limit - u16Start)], (u16Len + u16RepLen) - (u16Start + u16Limit - u16Start));
         }
     }
     u16Buf[u16Len + u16RepLen] = 0;
