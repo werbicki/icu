@@ -14,6 +14,9 @@
 *
 *   created on: 1999jul27
 *   created by: Markus W. Scherer, updated by Matitiahu Allouche
+*
+*   Contributions:
+*   UText enhancements by Paul Werbicki
 */
 
 #ifndef UBIDI_H

@@ -14,8 +14,9 @@
 *
 *   created on: 1999jul27
 *   created by: Markus W. Scherer, updated by Matitiahu Allouche
-*   modified:   2018-11-22, Paul Werbicki - added UText support
 *
+*   Contributions:
+*   UText enhancements by Paul Werbicki
 */
 
 #include "cmemory.h"
@@ -442,64 +443,66 @@ checkParaCount(UBiDi *pBiDi) {
  */
 static UBool
 getDirProps(UBiDi *pBiDi) {
-    UText *ut=&pBiDi->ut;
-    DirProp *dirProps=pBiDi->dirPropsMemory;    /* pBiDi->dirProps is const */
+    UText *ut = &pBiDi->ut;
+    DirProp *dirProps = pBiDi->dirPropsMemory;    /* pBiDi->dirProps is const */
 
-    int32_t originalLength=pBiDi->originalLength;
-    Flags flags=0;      /* collect all directionalities in the text */
-    DirProp dirProp=0, defaultParaLevel=0;  /* initialize to avoid compiler warnings */
-    UBool isDefaultLevel=IS_DEFAULT_LEVEL(pBiDi->paraLevel);
+    int32_t originalLength = pBiDi->originalLength;
+    Flags flags = 0;      /* collect all directionalities in the text */
+    DirProp dirProp = 0, defaultParaLevel = 0;  /* initialize to avoid compiler warnings */
+    UBool isDefaultLevel = IS_DEFAULT_LEVEL(pBiDi->paraLevel);
     /* for inverse BiDi, the default para level is set to RTL if there is a
        strong R or AL character at either end of the text                            */
-    UBool isDefaultLevelInverse=isDefaultLevel && (UBool)
-            (pBiDi->reorderingMode==UBIDI_REORDER_INVERSE_LIKE_DIRECT ||
-             pBiDi->reorderingMode==UBIDI_REORDER_INVERSE_FOR_NUMBERS_SPECIAL);
-    int32_t lastArabicPos=-1;
-    int32_t controlCount=0;
+    UBool isDefaultLevelInverse = isDefaultLevel && (UBool)
+        (pBiDi->reorderingMode == UBIDI_REORDER_INVERSE_LIKE_DIRECT ||
+            pBiDi->reorderingMode == UBIDI_REORDER_INVERSE_FOR_NUMBERS_SPECIAL);
+    int32_t lastArabicPos = -1;
+    int32_t controlCount = 0;
     UBool removeBiDiControls = (UBool)(pBiDi->reorderingOptions &
-                                       UBIDI_OPTION_REMOVE_CONTROLS);
+        UBIDI_OPTION_REMOVE_CONTROLS);
 
     enum State {
-         NOT_SEEKING_STRONG,            /* 0: not contextual paraLevel, not after FSI */
-         SEEKING_STRONG_FOR_PARA,       /* 1: looking for first strong char in para */
-         SEEKING_STRONG_FOR_FSI,        /* 2: looking for first strong after FSI */
-         LOOKING_FOR_PDI                /* 3: found strong after FSI, looking for PDI */
+        NOT_SEEKING_STRONG,            /* 0: not contextual paraLevel, not after FSI */
+        SEEKING_STRONG_FOR_PARA,       /* 1: looking for first strong char in para */
+        SEEKING_STRONG_FOR_FSI,        /* 2: looking for first strong after FSI */
+        LOOKING_FOR_PDI                /* 3: found strong after FSI, looking for PDI */
     };
     State state;
-    DirProp lastStrong=ON;              /* for default level & inverse BiDi */
+    DirProp lastStrong = ON;              /* for default level & inverse BiDi */
     /* The following stacks are used to manage isolate sequences. Those
        sequences may be nested, but obviously never more deeply than the
        maximum explicit embedding level.
        lastStack is the index of the last used entry in the stack. A value of -1
        means that there is no open isolate sequence.
        lastStack is reset to -1 on paragraph boundaries. */
-    /* The following stack contains the position of the initiator of
-       each open isolate sequence */
-    int32_t isolateStartStack[UBIDI_MAX_EXPLICIT_LEVEL+1];
+       /* The following stack contains the position of the initiator of
+          each open isolate sequence */
+    int32_t isolateStartStack[UBIDI_MAX_EXPLICIT_LEVEL + 1];
     /* The following stack contains the last known state before
        encountering the initiator of an isolate sequence */
-    State  previousStateStack[UBIDI_MAX_EXPLICIT_LEVEL+1];
-    int32_t stackLast=-1;
+    State  previousStateStack[UBIDI_MAX_EXPLICIT_LEVEL + 1];
+    int32_t stackLast = -1;
 
-    if(pBiDi->reorderingOptions & UBIDI_OPTION_STREAMING)
-        pBiDi->length=0;
-    defaultParaLevel=pBiDi->paraLevel&1;
-    if(isDefaultLevel) {
-        pBiDi->paras[0].level=defaultParaLevel;
-        lastStrong=defaultParaLevel;
-        if((utext_nativeLength(&pBiDi->prologue) > 0) /* there is a prologue */
-           && (dirProp=firstL_R_AL(pBiDi))!=ON) { /* with a strong character */
-            if(dirProp==L)
-                pBiDi->paras[0].level=0;    /* set the default para level */
+    if (pBiDi->reorderingOptions & UBIDI_OPTION_STREAMING)
+        pBiDi->length = 0;
+    defaultParaLevel = pBiDi->paraLevel & 1;
+    if (isDefaultLevel) {
+        pBiDi->paras[0].level = defaultParaLevel;
+        lastStrong = defaultParaLevel;
+        if ((utext_nativeLength(&pBiDi->prologue) > 0) /* there is a prologue */
+            && (dirProp = firstL_R_AL(pBiDi)) != ON) { /* with a strong character */
+            if (dirProp == L)
+                pBiDi->paras[0].level = 0;    /* set the default para level */
             else
-                pBiDi->paras[0].level=1;    /* set the default para level */
-            state=NOT_SEEKING_STRONG;
-        } else {
-            state=SEEKING_STRONG_FOR_PARA;
+                pBiDi->paras[0].level = 1;    /* set the default para level */
+            state = NOT_SEEKING_STRONG;
         }
-    } else {
-        pBiDi->paras[0].level=pBiDi->paraLevel;
-        state=NOT_SEEKING_STRONG;
+        else {
+            state = SEEKING_STRONG_FOR_PARA;
+        }
+    }
+    else {
+        pBiDi->paras[0].level = pBiDi->paraLevel;
+        state = NOT_SEEKING_STRONG;
     }
     /* count paragraphs and determine the paragraph level (P2..P3) */
     /*
@@ -509,153 +512,158 @@ getDirProps(UBiDi *pBiDi) {
      */
     UTEXT_SETNATIVEINDEX(ut, 0);
     UChar32 uchar = UTEXT_NEXT32(ut);
-    int32_t i = (int32_t)UTEXT_GETNATIVEINDEX(ut); // i represents native index after code point
-    for (; uchar != U_SENTINEL; 
-        uchar = UTEXT_NEXT32(ut), i = (int32_t)UTEXT_GETNATIVEINDEX(ut)) {
-        flags|=DIRPROP_FLAG(dirProp=(DirProp)ubidi_getCustomizedClass(pBiDi, uchar));
-        dirProps[i-1]=dirProp;
-        if(uchar>0xffff) {  /* set the lead surrogate's property to BN */
-            flags|=DIRPROP_FLAG(BN);
-            dirProps[i-2]=BN;
+    int32_t nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut); // i represents native index after code point
+    int32_t nativeLimit1 = nativeLimit - 1;
+    int32_t nativeLimit2 = nativeLimit - 2;
+    for (; uchar != U_SENTINEL;
+        nativeLimit2 = nativeLimit1, nativeLimit1 = nativeLimit, uchar = UTEXT_NEXT32(ut), nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut)) {
+        flags |= DIRPROP_FLAG(dirProp = (DirProp)ubidi_getCustomizedClass(pBiDi, uchar));
+        dirProps[nativeLimit1] = dirProp;
+        if (uchar > 0xffff) {  /* set the lead surrogate's property to BN */
+            flags |= DIRPROP_FLAG(BN);
+            dirProps[nativeLimit2] = BN;
         }
-        if(removeBiDiControls && IS_BIDI_CONTROL_CHAR(uchar))
+        if (removeBiDiControls && IS_BIDI_CONTROL_CHAR(uchar))
             controlCount++;
-        if(dirProp==L) {
-            if(state==SEEKING_STRONG_FOR_PARA) {
-                pBiDi->paras[pBiDi->paraCount-1].level=0;
-                state=NOT_SEEKING_STRONG;
+        if (dirProp == L) {
+            if (state == SEEKING_STRONG_FOR_PARA) {
+                pBiDi->paras[pBiDi->paraCount - 1].level = 0;
+                state = NOT_SEEKING_STRONG;
             }
-            else if(state==SEEKING_STRONG_FOR_FSI) {
-                if(stackLast<=UBIDI_MAX_EXPLICIT_LEVEL) {
+            else if (state == SEEKING_STRONG_FOR_FSI) {
+                if (stackLast <= UBIDI_MAX_EXPLICIT_LEVEL) {
                     /* no need for next statement, already set by default */
                     /* dirProps[isolateStartStack[stackLast]]=LRI; */
-                    flags|=DIRPROP_FLAG(LRI);
+                    flags |= DIRPROP_FLAG(LRI);
                 }
-                state=LOOKING_FOR_PDI;
+                state = LOOKING_FOR_PDI;
             }
-            lastStrong=L;
+            lastStrong = L;
             continue;
         }
-        if(dirProp==R || dirProp==AL) {
-            if(state==SEEKING_STRONG_FOR_PARA) {
-                pBiDi->paras[pBiDi->paraCount-1].level=1;
-                state=NOT_SEEKING_STRONG;
+        if (dirProp == R || dirProp == AL) {
+            if (state == SEEKING_STRONG_FOR_PARA) {
+                pBiDi->paras[pBiDi->paraCount - 1].level = 1;
+                state = NOT_SEEKING_STRONG;
             }
-            else if(state==SEEKING_STRONG_FOR_FSI) {
-                if(stackLast<=UBIDI_MAX_EXPLICIT_LEVEL) {
-                    dirProps[isolateStartStack[stackLast]]=RLI;
-                    flags|=DIRPROP_FLAG(RLI);
+            else if (state == SEEKING_STRONG_FOR_FSI) {
+                if (stackLast <= UBIDI_MAX_EXPLICIT_LEVEL) {
+                    dirProps[isolateStartStack[stackLast]] = RLI;
+                    flags |= DIRPROP_FLAG(RLI);
                 }
-                state=LOOKING_FOR_PDI;
+                state = LOOKING_FOR_PDI;
             }
-            lastStrong=R;
-            if(dirProp==AL)
-                lastArabicPos=i-1;
+            lastStrong = R;
+            if (dirProp == AL)
+                lastArabicPos = nativeLimit1;
             continue;
         }
-        if(dirProp>=FSI && dirProp<=RLI) {  /* FSI, LRI or RLI */
+        if (dirProp >= FSI && dirProp <= RLI) {  /* FSI, LRI or RLI */
             stackLast++;
-            if(stackLast<=UBIDI_MAX_EXPLICIT_LEVEL) {
-                isolateStartStack[stackLast]=i-1;
-                previousStateStack[stackLast]=state;
+            if (stackLast <= UBIDI_MAX_EXPLICIT_LEVEL) {
+                isolateStartStack[stackLast] = nativeLimit1;
+                previousStateStack[stackLast] = state;
             }
-            if(dirProp==FSI) {
-                dirProps[i-1]=LRI;      /* default if no strong char */
-                state=SEEKING_STRONG_FOR_FSI;
+            if (dirProp == FSI) {
+                dirProps[nativeLimit1] = LRI;      /* default if no strong char */
+                state = SEEKING_STRONG_FOR_FSI;
             }
             else
-                state=LOOKING_FOR_PDI;
+                state = LOOKING_FOR_PDI;
             continue;
         }
-        if(dirProp==PDI) {
-            if(state==SEEKING_STRONG_FOR_FSI) {
-                if(stackLast<=UBIDI_MAX_EXPLICIT_LEVEL) {
+        if (dirProp == PDI) {
+            if (state == SEEKING_STRONG_FOR_FSI) {
+                if (stackLast <= UBIDI_MAX_EXPLICIT_LEVEL) {
                     /* no need for next statement, already set by default */
                     /* dirProps[isolateStartStack[stackLast]]=LRI; */
-                    flags|=DIRPROP_FLAG(LRI);
+                    flags |= DIRPROP_FLAG(LRI);
                 }
             }
-            if(stackLast>=0) {
-                if(stackLast<=UBIDI_MAX_EXPLICIT_LEVEL)
-                    state=previousStateStack[stackLast];
+            if (stackLast >= 0) {
+                if (stackLast <= UBIDI_MAX_EXPLICIT_LEVEL)
+                    state = previousStateStack[stackLast];
                 stackLast--;
             }
             continue;
         }
-        if(dirProp==B) {
+        if (dirProp == B) {
             UChar32 uchar2 = UTEXT_NEXT32(ut);
             if (uchar2 != U_SENTINEL)
                 UTEXT_PREVIOUS32(ut);
-            if ((i < originalLength) && (uchar == CR) && (uchar2 == LF))
+            if ((nativeLimit < originalLength) && (uchar == CR) && (uchar2 == LF))
                 continue; // Skip CR when followed by LF
-            pBiDi->paras[pBiDi->paraCount-1].limit=i;
-            if(isDefaultLevelInverse && lastStrong==R)
-                pBiDi->paras[pBiDi->paraCount-1].level=1;
-            if(pBiDi->reorderingOptions & UBIDI_OPTION_STREAMING) {
+            pBiDi->paras[pBiDi->paraCount - 1].limit = nativeLimit;
+            if (isDefaultLevelInverse && lastStrong == R)
+                pBiDi->paras[pBiDi->paraCount - 1].level = 1;
+            if (pBiDi->reorderingOptions & UBIDI_OPTION_STREAMING) {
                 /* When streaming, we only process whole paragraphs
                    thus some updates are only done on paragraph boundaries */
-                pBiDi->length=i;        /* i is index to next character */
-                pBiDi->controlCount=controlCount;
+                pBiDi->length = nativeLimit;        /* i is index to next character */
+                pBiDi->controlCount = controlCount;
             }
-            if(i<originalLength) {              /* B not last char in text */
+            if (nativeLimit < originalLength) {              /* B not last char in text */
                 pBiDi->paraCount++;
-                if(checkParaCount(pBiDi)==FALSE)    /* not enough memory for a new para entry */
+                if (checkParaCount(pBiDi) == FALSE)    /* not enough memory for a new para entry */
                     return FALSE;
-                if(isDefaultLevel) {
-                    pBiDi->paras[pBiDi->paraCount-1].level=defaultParaLevel;
-                    state=SEEKING_STRONG_FOR_PARA;
-                    lastStrong=defaultParaLevel;
-                } else {
-                    pBiDi->paras[pBiDi->paraCount-1].level=pBiDi->paraLevel;
-                    state=NOT_SEEKING_STRONG;
+                if (isDefaultLevel) {
+                    pBiDi->paras[pBiDi->paraCount - 1].level = defaultParaLevel;
+                    state = SEEKING_STRONG_FOR_PARA;
+                    lastStrong = defaultParaLevel;
                 }
-                stackLast=-1;
+                else {
+                    pBiDi->paras[pBiDi->paraCount - 1].level = pBiDi->paraLevel;
+                    state = NOT_SEEKING_STRONG;
+                }
+                stackLast = -1;
             }
             continue;
         }
     }
     /* Ignore still open isolate sequences with overflow */
-    if(stackLast>UBIDI_MAX_EXPLICIT_LEVEL) {
-        stackLast=UBIDI_MAX_EXPLICIT_LEVEL;
-        state=SEEKING_STRONG_FOR_FSI;   /* to be on the safe side */
+    if (stackLast > UBIDI_MAX_EXPLICIT_LEVEL) {
+        stackLast = UBIDI_MAX_EXPLICIT_LEVEL;
+        state = SEEKING_STRONG_FOR_FSI;   /* to be on the safe side */
     }
     /* Resolve direction of still unresolved open FSI sequences */
-    while(stackLast>=0) {
-        if(state==SEEKING_STRONG_FOR_FSI) {
+    while (stackLast >= 0) {
+        if (state == SEEKING_STRONG_FOR_FSI) {
             /* no need for next statement, already set by default */
             /* dirProps[isolateStartStack[stackLast]]=LRI; */
-            flags|=DIRPROP_FLAG(LRI);
+            flags |= DIRPROP_FLAG(LRI);
             break;
         }
-        state=previousStateStack[stackLast];
+        state = previousStateStack[stackLast];
         stackLast--;
     }
     /* When streaming, ignore text after the last paragraph separator */
-    if(pBiDi->reorderingOptions & UBIDI_OPTION_STREAMING) {
-        if(pBiDi->length<originalLength)
+    if (pBiDi->reorderingOptions & UBIDI_OPTION_STREAMING) {
+        if (pBiDi->length < originalLength)
             pBiDi->paraCount--;
-    } else {
-        pBiDi->paras[pBiDi->paraCount-1].limit=originalLength;
-        pBiDi->controlCount=controlCount;
+    }
+    else {
+        pBiDi->paras[pBiDi->paraCount - 1].limit = originalLength;
+        pBiDi->controlCount = controlCount;
     }
     /* For inverse bidi, default para direction is RTL if there is
        a strong R or AL at either end of the paragraph */
-    if(isDefaultLevelInverse && lastStrong==R) {
-        pBiDi->paras[pBiDi->paraCount-1].level=1;
+    if (isDefaultLevelInverse && lastStrong == R) {
+        pBiDi->paras[pBiDi->paraCount - 1].level = 1;
     }
-    if(isDefaultLevel) {
-        pBiDi->paraLevel=static_cast<UBiDiLevel>(pBiDi->paras[0].level);
+    if (isDefaultLevel) {
+        pBiDi->paraLevel = static_cast<UBiDiLevel>(pBiDi->paras[0].level);
     }
     /* The following is needed to resolve the text direction for default level
        paragraphs containing no strong character */
-    for(i=0; i<pBiDi->paraCount; i++)
-        flags|=DIRPROP_FLAG_LR(pBiDi->paras[i].level);
+    int32_t i = 0;
+    for (i = 0; i < pBiDi->paraCount; i++)
+        flags |= DIRPROP_FLAG_LR(pBiDi->paras[i].level);
 
-    if(pBiDi->orderParagraphsLTR && (flags&DIRPROP_FLAG(B))) {
-        flags|=DIRPROP_FLAG(L);
+    if (pBiDi->orderParagraphsLTR && (flags&DIRPROP_FLAG(B))) {
+        flags |= DIRPROP_FLAG(L);
     }
-    pBiDi->flags=flags;
-    pBiDi->lastArabicPos=lastArabicPos;
+    pBiDi->flags = flags;
+    pBiDi->lastArabicPos = lastArabicPos;
     return TRUE;
 }
 
@@ -663,11 +671,11 @@ getDirProps(UBiDi *pBiDi) {
 U_CFUNC UBiDiLevel
 ubidi_getParaLevelAtIndex(const UBiDi *pBiDi, int32_t pindex) {
     int32_t i;
-    for(i=0; i<pBiDi->paraCount; i++)
-        if(pindex<pBiDi->paras[i].limit)
+    for (i = 0; i < pBiDi->paraCount; i++)
+        if (pindex < pBiDi->paras[i].limit)
             break;
-    if(i>=pBiDi->paraCount)
-        i=pBiDi->paraCount-1;
+    if (i >= pBiDi->paraCount)
+        i = pBiDi->paraCount - 1;
     return (UBiDiLevel)(pBiDi->paras[i].level);
 }
 

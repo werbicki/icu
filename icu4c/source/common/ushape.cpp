@@ -1,27 +1,30 @@
 // © 2016 and later: Unicode, Inc. and others.
 // License & terms of use: http://www.unicode.org/copyright.html
 /*
- ******************************************************************************
- *
- *   Copyright (C) 2000-2016, International Business Machines
- *   Corporation and others.  All Rights Reserved.
- *
- ******************************************************************************
- *   file name:  ushape.cpp
- *   encoding:   UTF-8
- *   tab size:   8 (not used)
- *   indentation:4
- *
- *   created on: 2000jun29
- *   created by: Markus W. Scherer
- *
- *   Arabic letter shaping implemented by Ayman Roshdy
- */
+******************************************************************************
+*
+*   Copyright (C) 2000-2016, International Business Machines
+*   Corporation and others.  All Rights Reserved.
+*
+******************************************************************************
+*   file name:  ushape.cpp
+*   encoding:   UTF-8
+*   tab size:   8 (not used)
+*   indentation:4
+*
+*   created on: 2000jun29
+*   created by: Markus W. Scherer
+*
+*   Contributions:
+*   Arabic letter shaping implemented by Ayman Roshdy
+*   UText enhancements by Paul Werbicki
+*/
 
 #include "unicode/utypes.h"
 #include "unicode/uchar.h"
 #include "unicode/ustring.h"
 #include "unicode/ushape.h"
+#include "unicode/utf16.h"
 #include "cmemory.h"
 #include "putilimp.h"
 #include "ustr_imp.h"
@@ -29,23 +32,54 @@
 #include "uassert.h"
 
 /*
- * This implementation is designed for 16-bit Unicode strings.
- * The main assumption is that the Arabic characters and their
- * presentation forms each fit into a single UChar.
- * With UTF-8, they occupy 2 or 3 bytes, and more than the ASCII
- * characters.
- */
-
-/*
  * ### TODO in general for letter shaping:
- * - the letter shaping code is UTF-16-unaware; needs update
- *   + especially invertBuffer()?!
  * - needs to handle the "Arabic Tail" that is used in some legacy codepages
  *   as a glyph fragment of wide-glyph letters
  *   + IBM Unicode conversion tables map it to U+200B (ZWSP)
  *   + IBM Egypt has proposed to encode the tail in Unicode among Arabic Presentation Forms
  *   + Unicode 3.2 added U+FE73 ARABIC TAIL FRAGMENT
  */
+
+static int32_t
+utext_replace32(UText *ut, int32_t start, int32_t *limit, UChar32 uchar, UBool forward, UErrorCode *pErrorCode) {
+    UChar uchars[2] = { (UChar)uchar, 0 };
+    int32_t length = (uchar == U_SENTINEL ? 0 : 1);
+    int64_t nativeIndex = 0;
+    int32_t nativeLength = 0;
+
+    if (pErrorCode == NULL) {
+        return 0;
+    }
+
+    if ((uchar != U_SENTINEL) &&
+        ((!U16_IS_SINGLE(uchar)) || (U_IS_SUPPLEMENTARY(uchar)))
+        )
+    {
+        uchars[0] = U16_LEAD(uchar);
+        uchars[1] = U16_TRAIL(uchar);
+        length = 2;
+    };
+
+    if ((!forward) && (!U_FAILURE(*pErrorCode))) {
+        nativeIndex = UTEXT_GETNATIVEINDEX(ut);
+    }
+    if ((!U_FAILURE(*pErrorCode))) {
+        nativeLength = utext_replace(ut, start, *limit, uchars, length, pErrorCode);
+        if (uchar == U_SENTINEL)
+            *limit = start;
+        else
+            *limit += nativeLength;
+    }
+    if ((!forward) && (!U_FAILURE(*pErrorCode))) {
+        UTEXT_SETNATIVEINDEX(ut, nativeIndex);
+    }
+
+    if (*pErrorCode == U_BUFFER_OVERFLOW_ERROR) {
+        nativeLength = length;
+    }
+
+    return nativeLength;
+}
 
 /* definitions for Arabic letter shaping ------------------------------------ */
 
@@ -333,879 +367,893 @@ static const uint8_t shapeTable[4][4][4]=
 };
 
 /*
- * This function shapes European digits to Arabic-Indic digits
- * in-place, writing over the input characters.
- * Since we know that we are only looking for BMP code points,
- * we can safely just work with code units (again, at least UTF-16).
+ * Converts the Alef characters into an equivalent LamAlef location in
+ * the 0x06xx Range, this is an intermediate stage in the operation of
+ * the program later it'll be converted into the 0xFExx LamAlefs in the
+ * shaping function.
  */
-static void
-_shapeToArabicDigitsWithContext(UChar *s, int32_t length,
-                                UChar digitBase,
-                                UBool isLogical, UBool lastStrongWasAL) {
-    int32_t i;
-    UChar c;
-
-    digitBase-=0x30;
-
-    /* the iteration direction depends on the type of input */
-    if(isLogical) {
-        for(i=0; i<length; ++i) {
-            c=s[i];
-            switch(ubidi_getClass(c)) {
-            case U_LEFT_TO_RIGHT: /* L */
-            case U_RIGHT_TO_LEFT: /* R */
-                lastStrongWasAL=FALSE;
-                break;
-            case U_RIGHT_TO_LEFT_ARABIC: /* AL */
-                lastStrongWasAL=TRUE;
-                break;
-            case U_EUROPEAN_NUMBER: /* EN */
-                if(lastStrongWasAL && (uint32_t)(c-0x30)<10) {
-                    s[i]=(UChar)(digitBase+c); /* digitBase+(c-0x30) - digitBase was modified above */
-                }
-                break;
-            default :
-                break;
-            }
-        }
-    } else {
-        for(i=length; i>0; /* pre-decrement in the body */) {
-            c=s[--i];
-            switch(ubidi_getClass(c)) {
-            case U_LEFT_TO_RIGHT: /* L */
-            case U_RIGHT_TO_LEFT: /* R */
-                lastStrongWasAL=FALSE;
-                break;
-            case U_RIGHT_TO_LEFT_ARABIC: /* AL */
-                lastStrongWasAL=TRUE;
-                break;
-            case U_EUROPEAN_NUMBER: /* EN */
-                if(lastStrongWasAL && (uint32_t)(c-0x30)<10) {
-                    s[i]=(UChar)(digitBase+c); /* digitBase+(c-0x30) - digitBase was modified above */
-                }
-                break;
-            default :
-                break;
-            }
-        }
-    }
-}
-
-/*
- *Name     : invertBuffer
- *Function : This function inverts the buffer, it's used
- *           in case the user specifies the buffer to be
- *           U_SHAPE_TEXT_DIRECTION_LOGICAL
- */
-static void
-invertBuffer(UChar *buffer, int32_t size, uint32_t /*options*/, int32_t lowlimit, int32_t highlimit) {
-    UChar temp;
-    int32_t i=0,j=0;
-    for(i=lowlimit,j=size-highlimit-1;i<j;i++,j--) {
-        temp = buffer[i];
-        buffer[i] = buffer[j];
-        buffer[j] = temp;
-    }
-}
-
-/*
- *Name     : changeLamAlef
- *Function : Converts the Alef characters into an equivalent
- *           LamAlef location in the 0x06xx Range, this is an
- *           intermediate stage in the operation of the program
- *           later it'll be converted into the 0xFExx LamAlefs
- *           in the shaping function.
- */
-static inline UChar
-changeLamAlef(UChar ch) {
-    switch(ch) {
-    case 0x0622 :
+static inline UChar32
+changeLamAlef(UChar32 ch)
+{
+    switch (ch) {
+    case 0x0622:
         return 0x065C;
-    case 0x0623 :
+    case 0x0623:
         return 0x065D;
-    case 0x0625 :
+    case 0x0625:
         return 0x065E;
-    case 0x0627 :
+    case 0x0627:
         return 0x065F;
     }
     return 0;
 }
 
 /*
- *Name     : getLink
- *Function : Resolves the link between the characters as
- *           Arabic characters have four forms :
- *           Isolated, Initial, Middle and Final Form
+ * Resolves the link between the characters as Arabic characters have four
+ * forms: Isolated, Initial, Middle and Final Form
  */
-static UChar
-getLink(UChar ch) {
-    if(ch >= 0x0622 && ch <= 0x06D3) {
-        return(araLink[ch-0x0622]);
-    } else if(ch == 0x200D) {
+static UChar32
+getLink(UChar32 ch)
+{
+    if (ch >= 0x0622 && ch <= 0x06D3) {
+        return(araLink[ch - 0x0622]);
+    }
+    else if (ch == 0x200D) {
         return(3);
-    } else if(ch >= 0x206D && ch <= 0x206F) {
+    }
+    else if (ch >= 0x206D && ch <= 0x206F) {
         return(4);
-    }else if(ch >= 0xFB50 && ch <= 0xFC62) {
-        return(presALink[ch-0xFB50]);
-    } else if(ch >= 0xFE70 && ch <= 0xFEFC) {
-        return(presBLink[ch-0xFE70]);
-    }else {
+    }
+    else if (ch >= 0xFB50 && ch <= 0xFC62) {
+        return(presALink[ch - 0xFB50]);
+    }
+    else if (ch >= 0xFE70 && ch <= 0xFEFC) {
+        return(presBLink[ch - 0xFE70]);
+    }
+    else {
         return(0);
     }
 }
 
 /*
- *Name     : countSpaces
- *Function : Counts the number of spaces
- *           at each end of the logical buffer
+ * Returns TRUE for Tashkeel characters in 06 range
+ * else return FALSE.
+ */
+static inline UBool
+isTashkeelChar(UChar32 ch)
+{
+    return (int32_t)(ch >= 0x064B && ch <= 0x0652);
+}
+
+/*
+ * Returns TRUE for Tashkeel characters in FE range
+ * else return FALSE.
+ */
+static inline UBool
+isTashkeelCharFE(UChar32 ch)
+{
+    return (int32_t)(ch >= 0xFE70 && ch <= 0xFE7F);
+}
+
+/*
+ * Returns TRUE for Alef characters else return FALSE.
+ */
+static inline UBool
+isAlefChar(UChar32 ch)
+{
+    return (int32_t)((ch == 0x0622) || (ch == 0x0623) || (ch == 0x0625) || (ch == 0x0627));
+}
+
+/*
+ * Returns TRUE for LamAlef characters else return FALSE.
+ */
+static inline UBool
+isLamAlefChar(UChar32 ch)
+{
+    return (int32_t)((ch >= 0xFEF5) && (ch <= 0xFEFC));
+}
+
+/*
+ * Returns TRUE if the character matches one of the tail
+ * characters (0xfe73 or 0x200b) otherwise returns FALSE
+ */
+static inline UBool
+isTailChar(UChar32 ch)
+{
+    if (ch == OLD_TAIL_CHAR || ch == NEW_TAIL_CHAR) {
+        return 1;
+    }
+    else {
+        return 0;
+    }
+}
+
+/*
+ * Returns TRUE if the character is a seen family isolated
+ * character in the FE range otherwise returns FALSE.
+ */
+static inline UBool
+isSeenTailFamilyChar(UChar32 ch)
+{
+    if (ch >= 0xfeb1 && ch < 0xfebf) {
+        return tailFamilyIsolatedFinal[ch - 0xFEB1];
+    }
+    else {
+        return 0;
+    }
+}
+
+/* 
+ * Returns TRUE if the character is a seen family character in the
+ * Unicode 06 range otherwise returns FALSE
+ */
+static inline UBool
+isSeenFamilyChar(UChar32 ch)
+{
+    if (ch >= 0x633 && ch <= 0x636) {
+        return 1;
+    }
+    else {
+        return 0;
+    }
+}
+
+/*
+ * Returns TRUE if the character is a Alef Maksoura Final or isolated
+ * else returns FALSE.
+ */
+static inline UBool
+isAlefMaksouraChar(UChar32 ch)
+{
+    return (int32_t)((ch == 0xFEEF) || (ch == 0xFEF0) || (ch == 0x0649));
+}
+
+/*
+ * Returns TRUE if the character is a yehHamza isolated or yehhamza
+ * final is found otherwise returns FALSE.
+ */
+static inline UBool
+isYehHamzaChar(UChar32 ch)
+{
+    if ((ch == 0xFE89) || (ch == 0xFE8A)) {
+        return 1;
+    }
+    else {
+        return 0;
+    }
+}
+
+/*
+ * Checks if the Tashkeel Character is on Tatweel or not,if the
+ * Tashkeel on tatweel (FE range), it returns 1 else if the
+ * Tashkeel with shadda on tatweel (FC range) return 2 otherwise
+ * returns 0.
+ */
+static inline int32_t
+isTashkeelOnTatweelChar(UChar32 ch)
+{
+    if (ch >= 0xfe70 && ch <= 0xfe7f && ch != NEW_TAIL_CHAR && ch != 0xFE75 && ch != SHADDA_TATWEEL_CHAR)
+    {
+        return tashkeelMedial[ch - 0xFE70];
+    }
+    else if ((ch >= 0xfcf2 && ch <= 0xfcf4) || (ch == SHADDA_TATWEEL_CHAR)) {
+        return 2;
+    }
+    else {
+        return 0;
+    }
+}
+
+/*
+ * Checks if the Tashkeel Character is in the isolated form
+ * (i.e. Unicode FE range) returns 1 else if the Tashkeel
+ * with shadda is in the isolated form (i.e. Unicode FC range)
+ * returns 2 otherwise returns 0
+ */
+static inline int32_t
+isIsolatedTashkeelChar(UChar32 ch)
+{
+    if (ch >= 0xfe70 && ch <= 0xfe7f && ch != NEW_TAIL_CHAR && ch != 0xFE75) {
+        return (1 - tashkeelMedial[ch - 0xFE70]);
+    }
+    else if (ch >= 0xfc5e && ch <= 0xfc63) {
+        return 1;
+    }
+    else {
+        return 0;
+    }
+}
+
+/*
+ * This function counts the number of spaces at each end of
+ * the logical buffer. The count is in the native index of
+ * the UText.
  */
 static void
-countSpaces(UChar *dest, int32_t size, uint32_t /*options*/, int32_t *spacesCountl, int32_t *spacesCountr) {
-    int32_t i = 0;
-    int32_t countl = 0,countr = 0;
-    while((dest[i] == SPACE_CHAR) && (countl < size)) {
-       countl++;
-       i++;
-    }
-    if (countl < size) {  /* the entire buffer is not all space */
-        while(dest[size-1] == SPACE_CHAR) {
-            countr++;
-            size--;
-        }
-    }
-    *spacesCountl = countl;
-    *spacesCountr = countr;
-}
+countSpaces(UText *ut,
+    uint32_t /*options*/,
+    int32_t *nativeSpacesLeft,
+    int32_t *nativeSpacesRight)
+{
+    int32_t spacesLeft = 0;
+    int32_t spacesRight = 0;
 
-/*
- *Name     : isTashkeelChar
- *Function : Returns 1 for Tashkeel characters in 06 range else return 0
- */
-static inline int32_t
-isTashkeelChar(UChar ch) {
-    return (int32_t)( ch>=0x064B && ch<= 0x0652 );
-}
-
-/*
- *Name     : isTashkeelCharFE
- *Function : Returns 1 for Tashkeel characters in FE range else return 0
- */
-static inline int32_t
-isTashkeelCharFE(UChar ch) {
-    return (int32_t)( ch>=0xFE70 && ch<= 0xFE7F );
-}
-
-/*
- *Name     : isAlefChar
- *Function : Returns 1 for Alef characters else return 0
- */
-static inline int32_t
-isAlefChar(UChar ch) {
-    return (int32_t)( (ch==0x0622)||(ch==0x0623)||(ch==0x0625)||(ch==0x0627) );
-}
-
-/*
- *Name     : isLamAlefChar
- *Function : Returns 1 for LamAlef characters else return 0
- */
-static inline int32_t
-isLamAlefChar(UChar ch) {
-    return (int32_t)((ch>=0xFEF5)&&(ch<=0xFEFC) );
-}
-
-/*BIDI
- *Name     : isTailChar
- *Function : returns 1 if the character matches one of the tail characters (0xfe73 or 0x200b) otherwise returns 0
- */
-
-static inline int32_t
-isTailChar(UChar ch) {
-    if(ch == OLD_TAIL_CHAR || ch == NEW_TAIL_CHAR){
-            return 1;
-    }else{
-            return 0;
-    }
-}
-
-/*BIDI
- *Name     : isSeenTailFamilyChar
- *Function : returns 1 if the character is a seen family isolated character
- *           in the FE range otherwise returns 0
- */
-
-static inline int32_t
-isSeenTailFamilyChar(UChar ch) {
-    if(ch >= 0xfeb1 && ch < 0xfebf){
-            return tailFamilyIsolatedFinal [ch - 0xFEB1];
-    }else{
-            return 0;
-    }
-}
-
- /* Name     : isSeenFamilyChar
-  * Function : returns 1 if the character is a seen family character in the Unicode
-  *            06 range otherwise returns 0
- */
-
-static inline int32_t
-isSeenFamilyChar(UChar  ch){
-    if(ch >= 0x633 && ch <= 0x636){
-        return 1;
-    }else {
-        return 0;
-    }
-}
-
-/*Start of BIDI*/
-/*
- *Name     : isAlefMaksouraChar
- *Function : returns 1 if the character is a Alef Maksoura Final or isolated
- *           otherwise returns 0
- */
-static inline int32_t
-isAlefMaksouraChar(UChar ch) {
-    return (int32_t)( (ch == 0xFEEF) || ( ch == 0xFEF0) || (ch == 0x0649));
-}
-
-/*
- * Name     : isYehHamzaChar
- * Function : returns 1 if the character is a yehHamza isolated or yehhamza
- *            final is found otherwise returns 0
- */
-static inline int32_t
-isYehHamzaChar(UChar ch) {
-    if((ch==0xFE89)||(ch==0xFE8A)){
-        return 1;
-    }else{
-        return 0;
-    }
-}
-
- /*
- * Name: isTashkeelOnTatweelChar
- * Function: Checks if the Tashkeel Character is on Tatweel or not,if the
- *           Tashkeel on tatweel (FE range), it returns 1 else if the
- *           Tashkeel with shadda on tatweel (FC range)return 2 otherwise
- *           returns 0
- */
-static inline int32_t
-isTashkeelOnTatweelChar(UChar ch){
-    if(ch >= 0xfe70 && ch <= 0xfe7f && ch != NEW_TAIL_CHAR && ch != 0xFE75 && ch != SHADDA_TATWEEL_CHAR)
+    utext_setNativeIndex(ut, 0);
+    int32_t nativeStart = 0;
+    UChar32 uchar = UTEXT_NEXT32(ut);
+    int32_t nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+    for (; (uchar != U_SENTINEL) && (uchar == SPACE_CHAR);
+        nativeStart = nativeLimit, uchar = UTEXT_NEXT32(ut), nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut))
     {
-        return tashkeelMedial [ch - 0xFE70];
-    }else if( (ch >= 0xfcf2 && ch <= 0xfcf4) || (ch == SHADDA_TATWEEL_CHAR)) {
-        return 2;
-    }else{
+        spacesLeft += nativeLimit - nativeStart;
+    }
+
+    if (uchar != U_SENTINEL)
+    {
+        utext_setNativeIndex(ut, utext_nativeLength(ut));
+        nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+        uchar = UTEXT_PREVIOUS32(ut);
+        nativeStart = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+        for (; (uchar != U_SENTINEL) && (uchar == SPACE_CHAR);
+            nativeLimit = nativeStart, uchar = UTEXT_PREVIOUS32(ut), nativeStart = (int32_t)UTEXT_GETNATIVEINDEX(ut))
+        {
+            spacesRight += nativeLimit - nativeStart;
+        }
+    }
+
+    if (nativeSpacesLeft)
+        *nativeSpacesLeft = spacesLeft;
+    if (nativeSpacesRight)
+        *nativeSpacesRight = spacesRight;
+}
+
+/*
+ * This function inverts the buffer, it's used in case the user
+ * specifies the buffer to be U_SHAPE_TEXT_DIRECTION_LOGICAL. The
+ * inversion is done in-place using codepoints.
+ */
+static void
+invertBuffer(UText *ut,
+    uint32_t /*options*/,
+    int32_t nativeStart,
+    int32_t nativeLimit,
+    UErrorCode *pErrorCode)
+{
+    if ((pErrorCode == NULL) || (U_FAILURE(*pErrorCode))) {
+        return;
+    }
+
+    utext_setNativeIndex(ut, nativeStart);
+    UChar32 uchar = UTEXT_NEXT32(ut);
+    for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL) && (nativeLimit > nativeStart);
+        uchar = UTEXT_NEXT32(ut))
+    {
+        int32_t length = (int32_t)UTEXT_GETNATIVEINDEX(ut) - nativeStart;
+
+        utext_copy(ut, nativeStart, nativeStart + length, nativeLimit, TRUE, pErrorCode);
+        UTEXT_SETNATIVEINDEX(ut, nativeStart);
+
+        nativeLimit -= length;
+    }
+}
+
+static int32_t
+handleAggregateTashkeel(UText *ut, 
+    uint32_t options, 
+    UErrorCode *pErrorCode)
+{
+    if ((pErrorCode == NULL) || (U_FAILURE(*pErrorCode))) {
         return 0;
     }
+
+    UBool isLogical = (options & U_SHAPE_TEXT_DIRECTION_MASK) == U_SHAPE_TEXT_DIRECTION_LOGICAL;
+    UBool isAggregateTashkeel =
+        (options & (U_SHAPE_AGGREGATE_TASHKEEL_MASK + U_SHAPE_LETTERS_SHAPE_TASHKEEL_ISOLATED)) ==
+        (U_SHAPE_AGGREGATE_TASHKEEL + U_SHAPE_LETTERS_SHAPE_TASHKEEL_ISOLATED);
+    UBool isAggregationPossible = TRUE;
+    UChar32 currLink = 0;
+    UChar32 prevLink = 0;
+    UChar32 prev = 0;
+
+    if (isLogical)
+    {
+        utext_setNativeIndex(ut, 0);
+        UTEXT_NEXT32(ut);
+
+        int32_t nativeStart = 0;
+        int32_t lastNativeStart = nativeStart;
+        UChar32 uchar = UTEXT_NEXT32(ut);
+        int32_t nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+        int32_t lastNativeLimit = nativeLimit;
+        for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL);
+            nativeStart = nativeLimit, uchar = UTEXT_NEXT32(ut), nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut))
+        {
+            prevLink = currLink;
+            currLink = getLink(uchar);
+
+            if (isAggregateTashkeel && ((prevLink | currLink) & COMBINE) == COMBINE && isAggregationPossible) {
+                isAggregationPossible = FALSE;
+
+                uchar = (prev < uchar ? prev : uchar) - 0x064C + 0xFC5E;
+                currLink = getLink(uchar);
+
+                int32_t prevLastNativeLimit = lastNativeLimit;
+                utext_replace32(ut, lastNativeStart, &lastNativeLimit, uchar, FALSE, pErrorCode);
+                nativeStart += lastNativeLimit - prevLastNativeLimit;
+                nativeLimit += lastNativeLimit - prevLastNativeLimit;
+
+                utext_replace32(ut, nativeStart, &nativeLimit, U_SENTINEL, FALSE, pErrorCode);
+
+                nativeStart = lastNativeStart;
+                nativeLimit = lastNativeLimit;
+            }
+            else {
+                isAggregationPossible = TRUE;
+
+                prev = uchar;
+            }
+
+            lastNativeStart = nativeStart;
+            lastNativeLimit = nativeLimit;
+        }
+
+        return nativeLimit;
+    }
+    else
+    {
+        utext_setNativeIndex(ut, utext_nativeLength(ut));
+        int32_t nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+        int32_t lastNativeLimit = nativeLimit;
+        UChar32 uchar = UTEXT_PREVIOUS32(ut);
+        int32_t nativeStart = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+        int32_t lastNativeStart = nativeStart;
+        for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL);
+            nativeLimit = nativeStart, uchar = UTEXT_PREVIOUS32(ut), nativeStart = (int32_t)UTEXT_GETNATIVEINDEX(ut))
+        {
+            prevLink = currLink;
+            currLink = getLink(uchar);
+
+            if (isAggregateTashkeel && ((prevLink | currLink) & COMBINE) == COMBINE && isAggregationPossible) {
+                isAggregationPossible = FALSE;
+
+                uchar = (prev < uchar ? prev : uchar) - 0x064C + 0xFC5E;
+                currLink = getLink(uchar);
+
+                utext_replace32(ut, lastNativeStart, &lastNativeLimit, uchar, FALSE, pErrorCode);
+
+                int32_t prevNativeLimit = nativeLimit;
+                utext_replace32(ut, nativeStart, &nativeLimit, U_SENTINEL, FALSE, pErrorCode);
+                lastNativeStart += nativeLimit - prevNativeLimit;
+                lastNativeLimit += nativeLimit - prevNativeLimit;
+
+                nativeStart = lastNativeStart;
+                nativeLimit = lastNativeLimit;
+            }
+            else {
+                isAggregationPossible = TRUE;
+
+                prev = uchar;
+            }
+
+            lastNativeStart = nativeStart;
+            lastNativeLimit = nativeLimit;
+        }
+
+        return (int32_t)utext_nativeLength(ut);
+    }
 }
 
 /*
- * Name: isIsolatedTashkeelChar
- * Function: Checks if the Tashkeel Character is in the isolated form
- *           (i.e. Unicode FE range) returns 1 else if the Tashkeel
- *           with shadda is in the isolated form (i.e. Unicode FC range)
- *           returns 2 otherwise returns 0
+ * Replaces Tashkeel as following:
+ * Case 1: if the Tashkeel on tatweel, replace it with Tatweel.
+ * Case 2: if the Tashkeel aggregated with Shadda on Tatweel, replace
+ *         it with Shadda on Tatweel.
+ * Case 3: if the Tashkeel is isolated replace it with Space.
  */
-static inline int32_t
-isIsolatedTashkeelChar(UChar ch){
-    if(ch >= 0xfe70 && ch <= 0xfe7f && ch != NEW_TAIL_CHAR && ch != 0xFE75){
-        return (1 - tashkeelMedial [ch - 0xFE70]);
-    }else if(ch >= 0xfc5e && ch <= 0xfc63){
-        return 1;
-    }else{
+static int32_t
+handleTashkeelWithTatweel(UText *ut, 
+    uint32_t /*options*/, 
+    UErrorCode *pErrorCode)
+{
+    if ((pErrorCode == NULL) || (U_FAILURE(*pErrorCode))) {
         return 0;
     }
-}
 
-
-
-
-/*
- *Name     : calculateSize
- *Function : This function calculates the destSize to be used in preflighting
- *           when the destSize is equal to 0
- *           It is used also to calculate the new destsize in case the
- *           destination buffer will be resized.
- */
-
-static int32_t
-calculateSize(const UChar *source, int32_t sourceLength,
-int32_t destSize,uint32_t options) {
-    int32_t i = 0;
-
-    int lamAlefOption = 0;
-    int tashkeelOption = 0;
-
-    destSize = sourceLength;
-
-    if (((options&U_SHAPE_LETTERS_MASK) == U_SHAPE_LETTERS_SHAPE ||
-        ((options&U_SHAPE_LETTERS_MASK) == U_SHAPE_LETTERS_SHAPE_TASHKEEL_ISOLATED )) &&
-        ((options&U_SHAPE_LAMALEF_MASK) == U_SHAPE_LAMALEF_RESIZE )){
-            lamAlefOption = 1;
-    }
-    if((options&U_SHAPE_LETTERS_MASK) == U_SHAPE_LETTERS_SHAPE &&
-       ((options&U_SHAPE_TASHKEEL_MASK) == U_SHAPE_TASHKEEL_RESIZE ) ){
-            tashkeelOption = 1;
+    utext_setNativeIndex(ut, 0);
+    int32_t nativeStart = 0;
+    UChar32 uchar = UTEXT_NEXT32(ut);
+    int32_t nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+    for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL);
+        nativeStart = nativeLimit, uchar = UTEXT_NEXT32(ut), nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut))
+    {
+        if ((isTashkeelOnTatweelChar(uchar) == 1)) {
+            utext_replace32(ut, nativeStart, &nativeLimit, TATWEEL_CHAR, TRUE, pErrorCode);
         }
-
-    if(lamAlefOption || tashkeelOption){
-        if((options&U_SHAPE_TEXT_DIRECTION_MASK)==U_SHAPE_TEXT_DIRECTION_VISUAL_LTR) {
-            for(i=0;i<sourceLength;i++) {
-                if( ((isAlefChar(source[i]))&& (i<(sourceLength-1)) &&(source[i+1] == LAM_CHAR)) || (isTashkeelCharFE(source[i])) ) {
-                        destSize--;
-                    }
-                }
-            }else if((options&U_SHAPE_TEXT_DIRECTION_MASK)==U_SHAPE_TEXT_DIRECTION_LOGICAL) {
-                for(i=0;i<sourceLength;i++) {
-                    if( ( (source[i] == LAM_CHAR) && (i<(sourceLength-1)) && (isAlefChar(source[i+1]))) || (isTashkeelCharFE(source[i])) ) {
-                        destSize--;
-                    }
-                }
-            }
+        else if ((isTashkeelOnTatweelChar(uchar) == 2)) {
+            utext_replace32(ut, nativeStart, &nativeLimit, SHADDA_TATWEEL_CHAR, TRUE, pErrorCode);
         }
-
-    if ((options&U_SHAPE_LETTERS_MASK) == U_SHAPE_LETTERS_UNSHAPE){
-        if ( (options&U_SHAPE_LAMALEF_MASK) == U_SHAPE_LAMALEF_RESIZE){
-            for(i=0;i<sourceLength;i++) {
-                if(isLamAlefChar(source[i]))
-                destSize++;
-            }
+        else if (isIsolatedTashkeelChar(uchar) && uchar != SHADDA_CHAR) {
+            utext_replace32(ut, nativeStart, &nativeLimit, SPACE_CHAR, TRUE, pErrorCode);
         }
     }
 
-    return destSize;
+    return nativeLimit;
 }
 
 /*
- *Name     : handleTashkeelWithTatweel
- *Function : Replaces Tashkeel as following:
- *            Case 1 :if the Tashkeel on tatweel, replace it with Tatweel.
- *            Case 2 :if the Tashkeel aggregated with Shadda on Tatweel, replace
- *                   it with Shadda on Tatweel.
- *            Case 3: if the Tashkeel is isolated replace it with Space.
+ * The shapeUnicode function converts Lam + Alef into LamAlef + space,
+ * and Tashkeel to space.
  *
+ * handleGeneratedSpaces function puts these generated spaces
+ * according to the options the user specifies. LamAlef and Tashkeel
+ * spaces can be replaced at begin, at end, at near or decrease the
+ * buffer size.
+ *
+ * There is also Auto option for LamAlef and tashkeel, which will put
+ * the spaces at end of the buffer (or end of text if the user used
+ * the option U_SHAPE_SPACES_RELATIVE_TO_TEXT_BEGIN_END).
+ *
+ * If the text type was visual_LTR and the option
+ * U_SHAPE_SPACES_RELATIVE_TO_TEXT_BEGIN_END was selected the END
+ * option will place the space at the beginning of the buffer and
+ * BEGIN will place the space at the end of the buffer.
  */
 static int32_t
-handleTashkeelWithTatweel(UChar *dest, int32_t sourceLength,
-             int32_t /*destSize*/, uint32_t /*options*/,
-             UErrorCode * /*pErrorCode*/) {
-                 int i;
-                 for(i = 0; i < sourceLength; i++){
-                     if((isTashkeelOnTatweelChar(dest[i]) == 1)){
-                         dest[i] = TATWEEL_CHAR;
-                    }else if((isTashkeelOnTatweelChar(dest[i]) == 2)){
-                         dest[i] = SHADDA_TATWEEL_CHAR;
-                    }else if(isIsolatedTashkeelChar(dest[i]) && dest[i] != SHADDA_CHAR){
-                         dest[i] = SPACE_CHAR;
-                    }
-                 }
-                 return sourceLength;
-}
-
-
-
-/*
- *Name     : handleGeneratedSpaces
- *Function : The shapeUnicode function converts Lam + Alef into LamAlef + space,
- *           and Tashkeel to space.
- *           handleGeneratedSpaces function puts these generated spaces
- *           according to the options the user specifies. LamAlef and Tashkeel
- *           spaces can be replaced at begin, at end, at near or decrease the
- *           buffer size.
- *
- *           There is also Auto option for LamAlef and tashkeel, which will put
- *           the spaces at end of the buffer (or end of text if the user used
- *           the option U_SHAPE_SPACES_RELATIVE_TO_TEXT_BEGIN_END).
- *
- *           If the text type was visual_LTR and the option
- *           U_SHAPE_SPACES_RELATIVE_TO_TEXT_BEGIN_END was selected the END
- *           option will place the space at the beginning of the buffer and
- *           BEGIN will place the space at the end of the buffer.
- */
-
-static int32_t
-handleGeneratedSpaces(UChar *dest, int32_t sourceLength,
-                    int32_t destSize,
-                    uint32_t options,
-                    UErrorCode *pErrorCode,struct uShapeVariables shapeVars ) {
-
-    int32_t i = 0, j = 0;
-    int32_t count = 0;
-    UChar *tempbuffer=NULL;
+handleGeneratedSpaces(UText *ut,
+    uint32_t options,
+    UErrorCode *pErrorCode,
+    struct uShapeVariables shapeVars)
+{
+    if ((pErrorCode == NULL) || (U_FAILURE(*pErrorCode))) {
+        return 0;
+    }
 
     int lamAlefOption = 0;
     int tashkeelOption = 0;
     int shapingMode = SHAPE_MODE;
 
-    if (shapingMode == 0){
-        if ( (options&U_SHAPE_LAMALEF_MASK) == U_SHAPE_LAMALEF_RESIZE ){
+    if (shapingMode == 0) {
+        if ((options & U_SHAPE_LAMALEF_MASK) == U_SHAPE_LAMALEF_RESIZE) {
             lamAlefOption = 1;
         }
-        if ( (options&U_SHAPE_TASHKEEL_MASK) == U_SHAPE_TASHKEEL_RESIZE ){
+        if ((options & U_SHAPE_TASHKEEL_MASK) == U_SHAPE_TASHKEEL_RESIZE) {
             tashkeelOption = 1;
         }
     }
 
-    tempbuffer = (UChar *)uprv_malloc((sourceLength+1)*U_SIZEOF_UCHAR);
-    /* Test for NULL */
-    if(tempbuffer == NULL) {
-        *pErrorCode = U_MEMORY_ALLOCATION_ERROR;
-        return 0;
-    }
-
-
-    if (lamAlefOption || tashkeelOption){
-        uprv_memset(tempbuffer, 0, (sourceLength+1)*U_SIZEOF_UCHAR);
-
-        i = j = 0; count = 0;
-        while(i < sourceLength) {
-            if ( (lamAlefOption && dest[i] == LAMALEF_SPACE_SUB) ||
-               (tashkeelOption && dest[i] == TASHKEEL_SPACE_SUB) ){
-                j--;
-                count++;
-            } else {
-                tempbuffer[j] = dest[i];
+    if (lamAlefOption || tashkeelOption)
+    {
+        utext_setNativeIndex(ut, 0);
+        int32_t nativeStart = 0;
+        UChar32 uchar = UTEXT_NEXT32(ut);
+        int32_t nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+        for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL); 
+            nativeStart = nativeLimit, uchar = UTEXT_NEXT32(ut), nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut))
+        {
+            if ((lamAlefOption && uchar == LAMALEF_SPACE_SUB) || (tashkeelOption && uchar == TASHKEEL_SPACE_SUB)) {
+                utext_replace32(ut, nativeStart, &nativeLimit, U_SENTINEL, TRUE, pErrorCode);
             }
-            i++;
-            j++;
-        }
-
-        while(count >= 0) {
-            tempbuffer[i] = 0x0000;
-            i--;
-            count--;
-        }
-
-        u_memcpy(dest, tempbuffer, sourceLength);
-        destSize = u_strlen(dest);
-    }
-
-      lamAlefOption = 0;
-
-    if (shapingMode == 0){
-        if ( (options&U_SHAPE_LAMALEF_MASK) == U_SHAPE_LAMALEF_NEAR ){
-            lamAlefOption = 1;
         }
     }
 
-    if (lamAlefOption){
-        /* Lam+Alef is already shaped into LamAlef + FFFF */
-        i = 0;
-        while(i < sourceLength) {
-            if(lamAlefOption&&dest[i] == LAMALEF_SPACE_SUB){
-                dest[i] = SPACE_CHAR;
-            }
-            i++;
-        }
-        destSize = sourceLength;
-    }
     lamAlefOption = 0;
-    tashkeelOption = 0;
 
     if (shapingMode == 0) {
-        if ( ((options&U_SHAPE_LAMALEF_MASK) == shapeVars.uShapeLamalefBegin) ||
-              (((options&U_SHAPE_LAMALEF_MASK) == U_SHAPE_LAMALEF_AUTO )
-              && (shapeVars.spacesRelativeToTextBeginEnd==1)) ) {
+        if ((options & U_SHAPE_LAMALEF_MASK) == U_SHAPE_LAMALEF_NEAR) {
             lamAlefOption = 1;
         }
-        if ( (options&U_SHAPE_TASHKEEL_MASK) == shapeVars.uShapeTashkeelBegin ) {
-            tashkeelOption = 1;
-        }
     }
 
-    if(lamAlefOption || tashkeelOption){
-        uprv_memset(tempbuffer, 0, (sourceLength+1)*U_SIZEOF_UCHAR);
-        
-        i = j = sourceLength; count = 0;
-        
-        while(i >= 0) {
-            if ( (lamAlefOption && dest[i] == LAMALEF_SPACE_SUB) ||
-                 (tashkeelOption && dest[i] == TASHKEEL_SPACE_SUB) ){
-                j++;
-                count++;
-            }else {
-                tempbuffer[j] = dest[i];
+    if (lamAlefOption)
+    {
+        // Lam+Alef is already shaped into LamAlef + FFFF
+        utext_setNativeIndex(ut, 0);
+        int32_t nativeStart = 0;
+        UChar32 uchar = UTEXT_NEXT32(ut);
+        int32_t nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+        for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL);
+            nativeStart = nativeLimit, uchar = UTEXT_NEXT32(ut), nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut))
+        {
+            if (lamAlefOption && uchar == LAMALEF_SPACE_SUB) {
+                utext_replace32(ut, nativeStart, &nativeLimit, SPACE_CHAR, TRUE, pErrorCode);
             }
-            i--;
-            j--;
         }
-
-        for(i=0 ;i < count; i++){
-                tempbuffer[i] = SPACE_CHAR;
-        }
-
-        u_memcpy(dest, tempbuffer, sourceLength);
-        destSize = sourceLength;
     }
-
-
 
     lamAlefOption = 0;
     tashkeelOption = 0;
 
     if (shapingMode == 0) {
-        if ( ((options&U_SHAPE_LAMALEF_MASK) == shapeVars.uShapeLamalefEnd) ||
-              (((options&U_SHAPE_LAMALEF_MASK) == U_SHAPE_LAMALEF_AUTO )
-              && (shapeVars.spacesRelativeToTextBeginEnd==0)) ) {
+        if (((options & U_SHAPE_LAMALEF_MASK) == shapeVars.uShapeLamalefBegin) ||
+            (((options & U_SHAPE_LAMALEF_MASK) == U_SHAPE_LAMALEF_AUTO)
+                && (shapeVars.spacesRelativeToTextBeginEnd == 1))) {
             lamAlefOption = 1;
         }
-        if ( (options&U_SHAPE_TASHKEEL_MASK) == shapeVars.uShapeTashkeelEnd ){
+        if ((options & U_SHAPE_TASHKEEL_MASK) == shapeVars.uShapeTashkeelBegin) {
             tashkeelOption = 1;
         }
     }
 
-    if(lamAlefOption || tashkeelOption){
-        uprv_memset(tempbuffer, 0, (sourceLength+1)*U_SIZEOF_UCHAR);
-
-        i = j = 0; count = 0;
-        while(i < sourceLength) {
-            if ( (lamAlefOption && dest[i] == LAMALEF_SPACE_SUB) ||
-                 (tashkeelOption && dest[i] == TASHKEEL_SPACE_SUB) ){
-                j--;
-                count++;
-            }else {
-                tempbuffer[j] = dest[i];
+    if (lamAlefOption || tashkeelOption)
+    {
+        utext_setNativeIndex(ut, utext_nativeLength(ut));
+        int32_t nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+        UChar32 uchar = UTEXT_PREVIOUS32(ut);
+        int32_t nativeStart = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+        for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL);
+            nativeLimit = nativeStart, uchar = UTEXT_PREVIOUS32(ut), nativeStart = (int32_t)UTEXT_GETNATIVEINDEX(ut))
+        {
+            if ((lamAlefOption && uchar == LAMALEF_SPACE_SUB) ||
+                (tashkeelOption && uchar == TASHKEEL_SPACE_SUB)) {
+                utext_replace32(ut, nativeStart, &nativeLimit, U_SENTINEL, TRUE, pErrorCode);
+                int32_t nativeInsert = 0;
+                utext_replace32(ut, 0, &nativeInsert, SPACE_CHAR, TRUE, pErrorCode);
+                UTEXT_SETNATIVEINDEX(ut, nativeStart);
             }
-            i++;
-            j++;
         }
-
-        while(count >= 0) {
-            tempbuffer[i] = SPACE_CHAR;
-            i--;
-            count--;
-        }
-
-        u_memcpy(dest, tempbuffer, sourceLength);
-        destSize = sourceLength;
     }
 
+    lamAlefOption = 0;
+    tashkeelOption = 0;
 
-    if(tempbuffer){
-        uprv_free(tempbuffer);
+    if (shapingMode == 0) {
+        if (((options & U_SHAPE_LAMALEF_MASK) == shapeVars.uShapeLamalefEnd) ||
+            (((options & U_SHAPE_LAMALEF_MASK) == U_SHAPE_LAMALEF_AUTO)
+                && (shapeVars.spacesRelativeToTextBeginEnd == 0))) {
+            lamAlefOption = 1;
+        }
+        if ((options & U_SHAPE_TASHKEEL_MASK) == shapeVars.uShapeTashkeelEnd) {
+            tashkeelOption = 1;
+        }
     }
 
-    return destSize;
+    if (lamAlefOption || tashkeelOption)
+    {
+        utext_setNativeIndex(ut, 0);
+        int32_t nativeLength = (int32_t)utext_nativeLength(ut);
+        int32_t nativeStart = 0;
+        UChar32 uchar = UTEXT_NEXT32(ut);
+        int32_t nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+        for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL);
+            nativeStart = nativeLimit, uchar = UTEXT_NEXT32(ut), nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut))
+        {
+            if ((lamAlefOption && uchar == LAMALEF_SPACE_SUB) ||
+                (tashkeelOption && uchar == TASHKEEL_SPACE_SUB)) {
+                nativeLength -= (nativeLimit - nativeStart);
+                utext_replace32(ut, nativeStart, &nativeLimit, U_SENTINEL, TRUE, pErrorCode);
+                utext_replace32(ut, nativeLength, &nativeLength, SPACE_CHAR, TRUE, pErrorCode);
+                UTEXT_SETNATIVEINDEX(ut, nativeStart);
+            }
+        }
+    }
+
+    return (int32_t)utext_nativeLength(ut);
 }
 
 /*
- *Name     :expandCompositCharAtBegin
- *Function :Expands the LamAlef character to Lam and Alef consuming the required
- *         space from beginning of the buffer. If the text type was visual_LTR
- *         and the option U_SHAPE_SPACES_RELATIVE_TO_TEXT_BEGIN_END was selected
- *         the spaces will be located at end of buffer.
- *         If there are no spaces to expand the LamAlef, an error
- *         will be set to U_NO_SPACE_AVAILABLE as defined in utypes.h
+ * Expands the LamAlef character to Lam and Alef consuming the required
+ * space from beginning of the buffer. If the text type was visual_LTR
+ * and the option U_SHAPE_SPACES_RELATIVE_TO_TEXT_BEGIN_END was selected
+ * the spaces will be located at end of buffer.
+ * If there are no spaces to expand the LamAlef, an error
+ * will be set to U_NO_SPACE_AVAILABLE as defined in utypes.h
  */
-
 static int32_t
-expandCompositCharAtBegin(UChar *dest, int32_t sourceLength, int32_t destSize,UErrorCode *pErrorCode) {
-    int32_t      i = 0,j = 0;
-    int32_t      countl = 0;
-    UChar    *tempbuffer=NULL;
-
-    tempbuffer = (UChar *)uprv_malloc((sourceLength+1)*U_SIZEOF_UCHAR);
-
-    /* Test for NULL */
-    if(tempbuffer == NULL) {
-        *pErrorCode = U_MEMORY_ALLOCATION_ERROR;
+expandCompositCharAtBegin(UText *ut,
+    UErrorCode *pErrorCode)
+{
+    if ((pErrorCode == NULL) || (U_FAILURE(*pErrorCode))) {
         return 0;
     }
 
-        uprv_memset(tempbuffer, 0, (sourceLength+1)*U_SIZEOF_UCHAR);
+    int32_t nativeSpacesLeft = 0;
+    int32_t nativeSpacesRight = 0;
 
-        i = 0;
-        while(dest[i] == SPACE_CHAR) {
-            countl++;
-            i++;
+    countSpaces(ut, 0, &nativeSpacesLeft, &nativeSpacesRight);
+
+    int32_t startNativeStart = 0;
+    utext_setNativeIndex(ut, startNativeStart);
+    UTEXT_NEXT32(ut);
+    int32_t startNativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+
+    utext_setNativeIndex(ut, utext_nativeLength(ut));
+    int32_t nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+    UChar32 uchar = UTEXT_PREVIOUS32(ut);
+    int32_t nativeStart = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+    for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL);
+        nativeLimit = nativeStart, uchar = UTEXT_PREVIOUS32(ut), nativeStart = (int32_t)UTEXT_GETNATIVEINDEX(ut))
+    {
+        if (nativeSpacesLeft > 0 && isLamAlefChar(uchar)) {
+            utext_copy(ut, startNativeStart, startNativeLimit, nativeLimit, TRUE, pErrorCode);
+            nativeStart -= startNativeLimit - startNativeStart;
+            nativeLimit -= startNativeLimit - startNativeStart;
+
+            utext_replace32(ut, nativeStart, &nativeLimit, convertLamAlef[uchar - 0xFEF5], TRUE, pErrorCode);
+            int32_t nativeLimit2 = nativeLimit + (startNativeLimit - startNativeStart);
+            utext_replace32(ut, nativeLimit, &nativeLimit2, LAM_CHAR, FALSE, pErrorCode);
+            nativeLimit = nativeLimit2;
+
+            utext_setNativeIndex(ut, startNativeStart);
+            UTEXT_NEXT32(ut);
+            startNativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+
+            UTEXT_SETNATIVEINDEX(ut, nativeStart);
+
+            nativeSpacesLeft--;
         }
-
-        i = j = sourceLength-1;
-
-        while(i >= 0 && j >= 0) {
-            if( countl>0 && isLamAlefChar(dest[i])) {
-                tempbuffer[j] = LAM_CHAR;
-                /* to ensure the array index is within the range */
-                U_ASSERT(dest[i] >= 0xFEF5u
-                    && dest[i]-0xFEF5u < UPRV_LENGTHOF(convertLamAlef));
-                tempbuffer[j-1] = convertLamAlef[ dest[i] - 0xFEF5 ];
-                j--;
-                countl--;
-            }else {
-                 if( countl == 0 && isLamAlefChar(dest[i]) ) {
-                     *pErrorCode=U_NO_SPACE_AVAILABLE;
-                     }
-                 tempbuffer[j] = dest[i];
+        else {
+            if (nativeSpacesLeft == 0 && isLamAlefChar(uchar)) {
+                *pErrorCode = U_NO_SPACE_AVAILABLE;
             }
-            i--;
-            j--;
         }
-        u_memcpy(dest, tempbuffer, sourceLength);
+    }
 
-        uprv_free(tempbuffer);
-
-        destSize = sourceLength;
-        return destSize;
+    return (int32_t)utext_nativeLength(ut);
 }
 
 /*
- *Name     : expandCompositCharAtEnd
- *Function : Expands the LamAlef character to Lam and Alef consuming the
- *           required space from end of the buffer. If the text type was
- *           Visual LTR and the option U_SHAPE_SPACES_RELATIVE_TO_TEXT_BEGIN_END
- *           was used, the spaces will be consumed from begin of buffer. If
- *           there are no spaces to expand the LamAlef, an error
- *           will be set to U_NO_SPACE_AVAILABLE as defined in utypes.h
+ * Expands the LamAlef character to Lam and Alef consuming the
+ * required space from end of the buffer. If the text type was
+ * Visual LTR and the option U_SHAPE_SPACES_RELATIVE_TO_TEXT_BEGIN_END
+ * was used, the spaces will be consumed from begin of buffer. If
+ * there are no spaces to expand the LamAlef, an error
+ * will be set to U_NO_SPACE_AVAILABLE as defined in utypes.h
  */
-
 static int32_t
-expandCompositCharAtEnd(UChar *dest, int32_t sourceLength, int32_t destSize,UErrorCode *pErrorCode) {
-    int32_t      i = 0,j = 0;
-
-    int32_t      countr = 0;
-    int32_t  inpsize = sourceLength;
-
-    UChar    *tempbuffer=NULL;
-    tempbuffer = (UChar *)uprv_malloc((sourceLength+1)*U_SIZEOF_UCHAR);
-
-    /* Test for NULL */
-    if(tempbuffer == NULL) {
-        *pErrorCode = U_MEMORY_ALLOCATION_ERROR;
-         return 0;
+expandCompositCharAtEnd(UText *ut,
+    UErrorCode *pErrorCode)
+{
+    if ((pErrorCode == NULL) || (U_FAILURE(*pErrorCode))) {
+        return 0;
     }
 
-    uprv_memset(tempbuffer, 0, (sourceLength+1)*U_SIZEOF_UCHAR);
+    int32_t nativeSpacesLeft = 0;
+    int32_t nativeSpacesRight = 0;
 
-    while(dest[inpsize-1] == SPACE_CHAR) {
-        countr++;
-        inpsize--;
-    }
+    countSpaces(ut, 0, &nativeSpacesLeft, &nativeSpacesRight);
 
-    i = sourceLength - countr - 1;
-    j = sourceLength - 1;
+    int32_t endNativeLimit = (int32_t)utext_nativeLength(ut);
+    utext_setNativeIndex(ut, endNativeLimit);
+    UTEXT_PREVIOUS32(ut);
+    int32_t endNativeStart = (int32_t)UTEXT_GETNATIVEINDEX(ut);
 
-    while(i >= 0 && j >= 0) {
-        if( countr>0 && isLamAlefChar(dest[i]) ) {
-            tempbuffer[j] = LAM_CHAR;
-            tempbuffer[j-1] = convertLamAlef[ dest[i] - 0xFEF5 ];
-            j--;
-            countr--;
-        }else {
-            if ((countr == 0) && isLamAlefChar(dest[i]) ) {
-                *pErrorCode=U_NO_SPACE_AVAILABLE;
-            }
-            tempbuffer[j] = dest[i];
+    utext_setNativeIndex(ut, endNativeLimit - nativeSpacesRight);
+    int32_t nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+    UChar32 uchar = UTEXT_PREVIOUS32(ut);
+    int32_t nativeStart = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+    for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL);
+        nativeLimit = nativeStart, uchar = UTEXT_PREVIOUS32(ut), nativeStart = (int32_t)UTEXT_GETNATIVEINDEX(ut))
+    {
+        if (nativeSpacesRight > 0 && isLamAlefChar(uchar)) {
+            utext_copy(ut, endNativeStart, endNativeLimit, nativeLimit, TRUE, pErrorCode);
+            utext_replace32(ut, nativeStart, &nativeLimit, convertLamAlef[uchar - 0xFEF5], TRUE, pErrorCode);
+            int32_t nativeLimit2 = nativeLimit + (endNativeLimit - endNativeStart);
+            utext_replace32(ut, nativeLimit, &nativeLimit2, LAM_CHAR, FALSE, pErrorCode);
+            nativeLimit = nativeLimit2;
+
+            utext_setNativeIndex(ut, endNativeLimit);
+            UTEXT_PREVIOUS32(ut);
+            endNativeStart = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+
+            UTEXT_SETNATIVEINDEX(ut, nativeStart);
+
+            nativeSpacesRight--;
         }
-        i--;
-        j--;
-    }
-
-    if(countr > 0) {
-        u_memmove(tempbuffer, tempbuffer+countr, sourceLength);
-        if(u_strlen(tempbuffer) < sourceLength) {
-            for(i=sourceLength-1;i>=sourceLength-countr;i--) {
-                tempbuffer[i] = SPACE_CHAR;
+        else {
+            if ((nativeSpacesRight == 0) && isLamAlefChar(uchar)) {
+                *pErrorCode = U_NO_SPACE_AVAILABLE;
             }
         }
     }
-    u_memcpy(dest, tempbuffer, sourceLength);
 
-    uprv_free(tempbuffer);
-
-    destSize = sourceLength;
-    return destSize;
+    return (int32_t)utext_nativeLength(ut);
 }
 
 /*
- *Name     : expandCompositCharAtNear
- *Function : Expands the LamAlef character into Lam + Alef, YehHamza character
- *           into Yeh + Hamza, SeenFamily character into SeenFamily character
- *           + Tail, while consuming the space next to the character.
- *           If there are no spaces next to the character, an error
- *           will be set to U_NO_SPACE_AVAILABLE as defined in utypes.h
+ * Expands the LamAlef character into Lam + Alef, YehHamza character
+ * into Yeh + Hamza, SeenFamily character into SeenFamily character
+ * + Tail, while consuming the space next to the character.
+ * If there are no spaces next to the character, an error
+ * will be set to U_NO_SPACE_AVAILABLE as defined in utypes.h
  */
-
 static int32_t
-expandCompositCharAtNear(UChar *dest, int32_t sourceLength, int32_t destSize,UErrorCode *pErrorCode,
-                         int yehHamzaOption, int seenTailOption, int lamAlefOption, struct uShapeVariables shapeVars) {
-    int32_t      i = 0;
+expandCompositCharAtNear(UText *ut,
+    UErrorCode *pErrorCode,
+    int yehHamzaOption,
+    int seenTailOption,
+    int lamAlefOption,
+    struct uShapeVariables shapeVars)
+{
+    if ((pErrorCode == NULL) || (U_FAILURE(*pErrorCode))) {
+        return 0;
+    }
 
+    utext_setNativeIndex(ut, 0);
+    int32_t nativeStart = 0;
+    int32_t lastNativeStart = (-1);
+    UChar32 uchar = UTEXT_NEXT32(ut);
+    UChar32 uchar1 = U_SENTINEL;
+    int32_t nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+    int32_t lastNativeLimit = nativeLimit;
+    for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL);
+        nativeStart = nativeLimit, uchar = UTEXT_NEXT32(ut), nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut))
+    {
+        UChar32 uchar2 = UTEXT_NEXT32(ut);
+        if (uchar2 != U_SENTINEL)
+            UTEXT_PREVIOUS32(ut);
 
-    UChar    lamalefChar, yehhamzaChar;
-
-    for(i = 0 ;i<=sourceLength-1;i++) {
-            if (seenTailOption && isSeenTailFamilyChar(dest[i])) {
-                if ((i>0) && (dest[i-1] == SPACE_CHAR) ) {
-                    dest[i-1] = shapeVars.tailChar;
-                }else {
-                    *pErrorCode=U_NO_SPACE_AVAILABLE;
-                }
-            }else if(yehHamzaOption && (isYehHamzaChar(dest[i])) ) {
-                if ((i>0) && (dest[i-1] == SPACE_CHAR) ) {
-                    yehhamzaChar = dest[i];
-                    dest[i] = yehHamzaToYeh[yehhamzaChar - YEH_HAMZAFE_CHAR];
-                    dest[i-1] = HAMZAFE_CHAR;
-                }else {
-
-                    *pErrorCode=U_NO_SPACE_AVAILABLE;
-                }
-            }else if(lamAlefOption && isLamAlefChar(dest[i+1])) {
-                if(dest[i] == SPACE_CHAR){
-                    lamalefChar = dest[i+1];
-                    dest[i+1] = LAM_CHAR;
-                    dest[i] = convertLamAlef[ lamalefChar - 0xFEF5 ];
-                }else {
-                    *pErrorCode=U_NO_SPACE_AVAILABLE;
-                }
+        if (seenTailOption && isSeenTailFamilyChar(uchar)) {
+            if (uchar1 == SPACE_CHAR) {
+                utext_replace32(ut, lastNativeStart, &lastNativeLimit, shapeVars.tailChar, TRUE, pErrorCode);
+                UTEXT_SETNATIVEINDEX(ut, nativeStart);
             }
-       }
-       destSize = sourceLength;
-       return destSize;
+            else {
+                *pErrorCode = U_NO_SPACE_AVAILABLE;
+            }
+        }
+        else if (yehHamzaOption && (isYehHamzaChar(uchar))) {
+            if (uchar1 == SPACE_CHAR) {
+                UChar32 yehhamzaChar = uchar;
+
+                int32_t prevLastNativeLimit = lastNativeLimit;
+                utext_replace32(ut, lastNativeStart, &lastNativeLimit, HAMZAFE_CHAR, TRUE, pErrorCode);
+                nativeStart += lastNativeLimit - prevLastNativeLimit;
+                nativeLimit += lastNativeLimit - prevLastNativeLimit;
+
+                utext_replace32(ut, nativeStart, &nativeLimit, yehHamzaToYeh[yehhamzaChar - YEH_HAMZAFE_CHAR], TRUE, pErrorCode);
+
+                UTEXT_SETNATIVEINDEX(ut, nativeStart);
+            }
+            else {
+                *pErrorCode = U_NO_SPACE_AVAILABLE;
+            }
+        }
+        else if (lamAlefOption && isLamAlefChar(uchar2)) {
+            if (uchar == SPACE_CHAR) {
+                UChar32 lamalefChar = uchar2;
+                utext_replace32(ut, nativeStart, &nativeLimit, convertLamAlef[lamalefChar - 0xFEF5], TRUE, pErrorCode);
+
+                nativeStart = nativeLimit;
+                uchar = UTEXT_NEXT32(ut);
+                nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+                utext_replace32(ut, nativeStart, &nativeLimit, LAM_CHAR, TRUE, pErrorCode);
+            }
+            else {
+                *pErrorCode = U_NO_SPACE_AVAILABLE;
+            }
+        }
+
+        lastNativeStart = nativeStart;
+        lastNativeLimit = nativeLimit;
+        uchar1 = uchar;
+    }
+
+    return nativeLimit;
 }
- /*
- * Name     : expandCompositChar
- * Function : LamAlef, need special handling, since it expands from one
- *            character into two characters while shaping or deshaping.
- *            In order to expand it, near or far spaces according to the
- *            options user specifies. Also buffer size can be increased.
+
+/*
+ * LamAlef, need special handling, since it expands from one
+ * character into two characters while shaping or deshaping.
+ * In order to expand it, near or far spaces according to the
+ * options user specifies. Also buffer size can be increased.
  *
- *            For SeenFamily characters and YehHamza only the near option is
- *            supported, while for LamAlef we can take spaces from begin, end,
- *            near or even increase the buffer size.
- *            There is also the Auto option for LamAlef only, which will first
- *            search for a space at end, begin then near, respectively.
- *            If there are no spaces to expand these characters, an error will be set to
- *            U_NO_SPACE_AVAILABLE as defined in utypes.h
+ * For SeenFamily characters and YehHamza only the near option is
+ * supported, while for LamAlef we can take spaces from begin, end,
+ * near or even increase the buffer size.
+ * There is also the Auto option for LamAlef only, which will first
+ * search for a space at end, begin then near, respectively.
+ * If there are no spaces to expand these characters, an error will be set to
+ * U_NO_SPACE_AVAILABLE as defined in utypes.h
  */
-
 static int32_t
-expandCompositChar(UChar *dest, int32_t sourceLength,
-              int32_t destSize,uint32_t options,
-              UErrorCode *pErrorCode, int shapingMode,struct uShapeVariables shapeVars) {
+expandCompositChar(UText *ut,
+    uint32_t options,
+    UErrorCode *pErrorCode,
+    int shapingMode,
+    struct uShapeVariables shapeVars)
+{
+    if ((pErrorCode == NULL) || (U_FAILURE(*pErrorCode))) {
+        return 0;
+    }
 
-    int32_t      i = 0,j = 0;
-
-    UChar    *tempbuffer=NULL;
+    int32_t nativeLength = (int32_t)utext_nativeLength(ut);
     int yehHamzaOption = 0;
     int seenTailOption = 0;
     int lamAlefOption = 0;
 
-    if (shapingMode == 1){
-        if ( (options&U_SHAPE_LAMALEF_MASK) == U_SHAPE_LAMALEF_AUTO){
+    if (shapingMode == 1) {
+        if ((options & U_SHAPE_LAMALEF_MASK) == U_SHAPE_LAMALEF_AUTO) {
 
-            if(shapeVars.spacesRelativeToTextBeginEnd == 0) {
-                destSize = expandCompositCharAtEnd(dest, sourceLength, destSize, pErrorCode);
+            if (shapeVars.spacesRelativeToTextBeginEnd == 0) {
+                nativeLength = expandCompositCharAtEnd(ut, pErrorCode);
 
-                if(*pErrorCode == U_NO_SPACE_AVAILABLE) {
+                if (*pErrorCode == U_NO_SPACE_AVAILABLE) {
                     *pErrorCode = U_ZERO_ERROR;
-                    destSize = expandCompositCharAtBegin(dest, sourceLength, destSize, pErrorCode);
+                    nativeLength = expandCompositCharAtBegin(ut, pErrorCode);
                 }
-            }else {
-                destSize = expandCompositCharAtBegin(dest, sourceLength, destSize, pErrorCode);
+            }
+            else {
+                nativeLength = expandCompositCharAtBegin(ut, pErrorCode);
 
-                if(*pErrorCode == U_NO_SPACE_AVAILABLE) {
+                if (*pErrorCode == U_NO_SPACE_AVAILABLE) {
                     *pErrorCode = U_ZERO_ERROR;
-                    destSize = expandCompositCharAtEnd(dest, sourceLength, destSize, pErrorCode);
+                    nativeLength = expandCompositCharAtEnd(ut, pErrorCode);
                 }
             }
 
-            if(*pErrorCode == U_NO_SPACE_AVAILABLE) {
+            if (*pErrorCode == U_NO_SPACE_AVAILABLE) {
                 *pErrorCode = U_ZERO_ERROR;
-                destSize = expandCompositCharAtNear(dest, sourceLength, destSize, pErrorCode, yehHamzaOption,
-                                                seenTailOption, 1,shapeVars);
+                nativeLength = expandCompositCharAtNear(ut, pErrorCode, yehHamzaOption, seenTailOption, 1, shapeVars);
             }
         }
     }
 
-    if (shapingMode == 1){
-        if ( (options&U_SHAPE_LAMALEF_MASK) == shapeVars.uShapeLamalefEnd){
-            destSize = expandCompositCharAtEnd(dest, sourceLength, destSize, pErrorCode);
+    if (shapingMode == 1) {
+        if ((options & U_SHAPE_LAMALEF_MASK) == shapeVars.uShapeLamalefEnd) {
+            nativeLength = expandCompositCharAtEnd(ut, pErrorCode);
         }
     }
 
-    if (shapingMode == 1){
-        if ( (options&U_SHAPE_LAMALEF_MASK) == shapeVars.uShapeLamalefBegin){
-            destSize = expandCompositCharAtBegin(dest, sourceLength, destSize, pErrorCode);
+    if (shapingMode == 1) {
+        if ((options & U_SHAPE_LAMALEF_MASK) == shapeVars.uShapeLamalefBegin) {
+            nativeLength = expandCompositCharAtBegin(ut, pErrorCode);
         }
     }
 
-    if (shapingMode == 0){
-         if ((options&U_SHAPE_YEHHAMZA_MASK) == U_SHAPE_YEHHAMZA_TWOCELL_NEAR){
-             yehHamzaOption = 1;
-         }
-         if ((options&U_SHAPE_SEEN_MASK) == U_SHAPE_SEEN_TWOCELL_NEAR){
+    if (shapingMode == 0) {
+        if ((options & U_SHAPE_YEHHAMZA_MASK) == U_SHAPE_YEHHAMZA_TWOCELL_NEAR) {
+            yehHamzaOption = 1;
+        }
+        if ((options & U_SHAPE_SEEN_MASK) == U_SHAPE_SEEN_TWOCELL_NEAR) {
             seenTailOption = 1;
-         }
+        }
     }
     if (shapingMode == 1) {
-        if ( (options&U_SHAPE_LAMALEF_MASK) == U_SHAPE_LAMALEF_NEAR) {
+        if ((options & U_SHAPE_LAMALEF_MASK) == U_SHAPE_LAMALEF_NEAR) {
             lamAlefOption = 1;
         }
     }
 
-
-    if (yehHamzaOption || seenTailOption || lamAlefOption){
-        destSize = expandCompositCharAtNear(dest, sourceLength, destSize, pErrorCode, yehHamzaOption,
-                                            seenTailOption,lamAlefOption,shapeVars);
+    if (yehHamzaOption || seenTailOption || lamAlefOption) {
+        nativeLength = expandCompositCharAtNear(ut, pErrorCode, yehHamzaOption, seenTailOption, lamAlefOption, shapeVars);
     }
 
+    if (shapingMode == 1) {
+        if ((options & U_SHAPE_LAMALEF_MASK) == U_SHAPE_LAMALEF_RESIZE) {
+            utext_setNativeIndex(ut, 0);
+            int32_t nativeStart = 0;
+            UChar32 uchar = UTEXT_NEXT32(ut);
+            int32_t nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+            for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL);
+                nativeStart = nativeLimit, uchar = UTEXT_NEXT32(ut), nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut))
+            {
+                if (isLamAlefChar(uchar))
+                {
+                    utext_replace32(ut, nativeStart, &nativeLimit, convertLamAlef[uchar - 0xFEF5], TRUE, pErrorCode);
+                    utext_replace32(ut, nativeLimit, &nativeLimit, LAM_CHAR, TRUE, pErrorCode);
 
-    if (shapingMode == 1){
-        if ( (options&U_SHAPE_LAMALEF_MASK) == U_SHAPE_LAMALEF_RESIZE){
-            destSize = calculateSize(dest,sourceLength,destSize,options);
-            tempbuffer = (UChar *)uprv_malloc((destSize+1)*U_SIZEOF_UCHAR);
-
-            /* Test for NULL */
-            if(tempbuffer == NULL) {
-                *pErrorCode = U_MEMORY_ALLOCATION_ERROR;
-                return 0;
-            }
-
-            uprv_memset(tempbuffer, 0, (destSize+1)*U_SIZEOF_UCHAR);
-
-            i = j = 0;
-            while(i < destSize && j < destSize) {
-                if(isLamAlefChar(dest[i]) ) {
-                    tempbuffer[j] = convertLamAlef[ dest[i] - 0xFEF5 ];
-                    tempbuffer[j+1] = LAM_CHAR;
-                    j++;
-                }else {
-                    tempbuffer[j] = dest[i];
+                    nativeStart = nativeLimit;
+                    nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut);
                 }
-                i++;
-                j++;
             }
 
-            u_memcpy(dest, tempbuffer, destSize);
+            nativeLength = nativeLimit;
         }
     }
 
-    if(tempbuffer) {
-        uprv_free(tempbuffer);
-    }
-    return destSize;
+    return nativeLength;
 }
 
-/*
- *Name     : shapeUnicode
- *Function : Converts an Arabic Unicode buffer in 06xx Range into a shaped
- *           arabic Unicode buffer in FExx Range
- */
 static int32_t
-shapeUnicode(UChar *dest, int32_t sourceLength,
-             int32_t destSize,uint32_t options,
-             UErrorCode *pErrorCode,
-             int tashkeelFlag, struct uShapeVariables shapeVars) {
-
-    int32_t          i, iend;
-    int32_t          step;
-    int32_t          lastPos,Nx, Nw;
-    unsigned int     Shape;
-    int32_t          lamalef_found = 0;
-    int32_t seenfamFound = 0, yehhamzaFound =0, tashkeelFound  = 0;
-    UChar            prevLink = 0, lastLink = 0, currLink, nextLink = 0;
-    UChar            wLamalef;
+shapeUnicode(UText *ut,
+    uint32_t options,
+    UErrorCode *pErrorCode,
+    int tashkeelFlag,
+    struct uShapeVariables shapeVars)
+{
+    if ((pErrorCode == NULL) || (U_FAILURE(*pErrorCode))) {
+        return 0;
+    }
 
     /*
      * Converts the input buffer from FExx Range into 06xx Range
@@ -1213,79 +1261,115 @@ shapeUnicode(UChar *dest, int32_t sourceLength,
      * even the lamalef is converted to the special region in
      * the 06xx range
      */
-    if ((options & U_SHAPE_PRESERVE_PRESENTATION_MASK)  == U_SHAPE_PRESERVE_PRESENTATION_NOOP) {
-        for (i = 0; i < sourceLength; i++) {
-            UChar inputChar  = dest[i];
-            if ( (inputChar >= 0xFB50) && (inputChar <= 0xFBFF)) {
-                UChar c = convertFBto06 [ (inputChar - 0xFB50) ];
+    if ((options & U_SHAPE_PRESERVE_PRESENTATION_MASK) == U_SHAPE_PRESERVE_PRESENTATION_NOOP) {
+        utext_setNativeIndex(ut, 0);
+        int32_t nativeStart = 0;
+        UChar32 uchar = UTEXT_NEXT32(ut);
+        int32_t nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+        for (; (uchar != U_SENTINEL);
+            nativeStart = nativeLimit, uchar = UTEXT_NEXT32(ut), nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut))
+        {
+            if ((uchar >= 0xFB50) && (uchar <= 0xFBFF)) {
+                UChar32 c = convertFBto06[(uchar - 0xFB50)];
                 if (c != 0)
-                    dest[i] = c;
-            } else if ( (inputChar >= 0xFE70) && (inputChar <= 0xFEFC)) {
-                dest[i] = convertFEto06 [ (inputChar - 0xFE70) ] ;
-            } else {
-                dest[i] = inputChar ;
+                    utext_replace32(ut, nativeStart, &nativeLimit, c, TRUE, pErrorCode);
+            }
+            else if ((uchar >= 0xFE70) && (uchar <= 0xFEFC)) {
+                utext_replace32(ut, nativeStart, &nativeLimit, convertFEto06[(uchar - 0xFE70)], TRUE, pErrorCode);
             }
         }
     }
-
-
-    /* sets the index to the end of the buffer, together with the step point to -1 */
-    i = sourceLength - 1;
-    iend = -1;
-    step = -1;
 
     /*
      * This function resolves the link between the characters .
      * Arabic characters have four forms :
      * Isolated Form, Initial Form, Middle Form and Final Form
      */
-    currLink = getLink(dest[i]);
 
-    lastPos = i;
-    Nx = -2, Nw = 0;
+    utext_setNativeIndex(ut, utext_nativeLength(ut));
+    int32_t nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+    int32_t lastNativeLimit = nativeLimit;
+    UChar32 uchar = UTEXT_PREVIOUS32(ut);
+    int32_t nativeStart = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+    int32_t lastNativeStart = nativeStart;
+    int32_t nativeNext = -1;
 
-    while (i != iend) {
-        /* If high byte of currLink > 0 then more than one shape */
-        if ((currLink & 0xFF00) > 0 || (getLink(dest[i]) & IRRELEVANT) != 0) {
-            Nw = i + step;
-            while (Nx < 0) {         /* we need to know about next char */
-                if(Nw == iend) {
-                    nextLink = 0;
-                    Nx = 3000;
-                } else {
-                    nextLink = getLink(dest[Nw]);
-                    if((nextLink & IRRELEVANT) == 0) {
-                        Nx = Nw;
-                    } else {
-                        Nw = Nw + step;
+    UBool lamalefFound = FALSE;
+    UBool seenfamFound = FALSE;
+    UBool yehhamzaFound = FALSE;
+    UBool tashkeelFound = FALSE;
+    UChar32 prevLink = 0;
+    UChar32 lastLink = 0;
+    UChar32 currLink = getLink(uchar);
+    UChar32 nextLink = 0;
+
+    for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL); )
+    {
+        // If high byte of currLink > 0 then more than one shape
+        if ((currLink & 0xFF00) > 0 || (getLink(uchar) & IRRELEVANT) != 0)
+        {
+            // We need to know about next char
+            if (nativeNext < 0)
+            {
+                UChar32 uchar2 = UTEXT_PREVIOUS32(ut);
+                nativeNext = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+                for (; (uchar2 != U_SENTINEL);
+                    uchar2 = UTEXT_PREVIOUS32(ut), nativeNext = (int32_t)UTEXT_GETNATIVEINDEX(ut))
+                {
+                    nextLink = getLink(uchar2);
+                    if ((nextLink & IRRELEVANT) == 0) {
+                        break;
                     }
                 }
-            }
 
-            if ( ((currLink & ALEFTYPE) > 0)  &&  ((lastLink & LAMTYPE) > 0) ) {
-                lamalef_found = 1;
-                wLamalef = changeLamAlef(dest[i]); /*get from 0x065C-0x065f */
-                if ( wLamalef != 0) {
-                    dest[i] = LAMALEF_SPACE_SUB;            /* The default case is to drop the Alef and replace */
-                    dest[lastPos] =wLamalef;     /* it by LAMALEF_SPACE_SUB which is the last character in the  */
-                    i=lastPos;                   /* unicode private use area, this is done to make   */
-                }                                /* sure that removeLamAlefSpaces() handles only the */
-                lastLink = prevLink;             /* spaces generated during lamalef generation.      */
-                currLink = getLink(wLamalef);    /* LAMALEF_SPACE_SUB is added here and is replaced by spaces   */
-            }                                    /* in removeLamAlefSpaces()                         */
-
-            if ((i > 0) && (dest[i-1] == SPACE_CHAR)){
-                if ( isSeenFamilyChar(dest[i])) {
-                    seenfamFound = 1;
-                } else if (dest[i] == YEH_HAMZA_CHAR) {
-                    yehhamzaFound = 1;
+                if (uchar2 == U_SENTINEL) {
+                    nextLink = 0;
                 }
+
+                UTEXT_SETNATIVEINDEX(ut, nativeStart);
             }
-            else if(i==0){
-                if ( isSeenFamilyChar(dest[i])){
-                    seenfamFound = 1;
-                } else if (dest[i] == YEH_HAMZA_CHAR) {
-                    yehhamzaFound = 1;
+
+            if (((currLink & ALEFTYPE) > 0) && ((lastLink & LAMTYPE) > 0)) {
+                UChar32 wLamalef = changeLamAlef(uchar); // get from 0x065C-0x065f
+                if (wLamalef != 0) {
+                    // The default case is to drop the Alef and replace
+                    // It by LAMALEF_SPACE_SUB which is the last character in the
+                    // unicode private use area, this is done to make
+                    // sure that removeLamAlefSpaces() handles only the
+                    // spaces generated during lamalef generation.
+                    // LAMALEF_SPACE_SUB is added here and is replaced by spaces
+                    // in removeLamAlefSpaces()
+
+                    utext_replace32(ut, lastNativeStart, &lastNativeLimit, wLamalef, TRUE, pErrorCode);
+
+                    int32_t prevNativeLimit = nativeLimit;
+                    utext_replace32(ut, nativeStart, &nativeLimit, LAMALEF_SPACE_SUB, FALSE, pErrorCode);
+                    lastNativeStart += nativeLimit - prevNativeLimit;
+                    lastNativeLimit += nativeLimit - prevNativeLimit;
+
+                    nativeStart = lastNativeStart;
+                    nativeLimit = lastNativeLimit;
+
+                    UTEXT_SETNATIVEINDEX(ut, nativeLimit);
+                    uchar = UTEXT_PREVIOUS32(ut);
+                }
+
+                lamalefFound = TRUE;
+
+                lastLink = prevLink;
+                currLink = getLink(wLamalef);
+            }
+
+            UChar32 uchar2 = UTEXT_PREVIOUS32(ut);
+            if (uchar2 != U_SENTINEL)
+                UTEXT_NEXT32(ut);
+
+            if ((uchar2 == SPACE_CHAR) || (uchar2 == U_SENTINEL)) {
+                if (isSeenFamilyChar(uchar)) {
+                    seenfamFound = TRUE;
+                }
+                else if (uchar == YEH_HAMZA_CHAR) {
+                    yehhamzaFound = TRUE;
                 }
             }
 
@@ -1294,121 +1378,281 @@ shapeUnicode(UChar *dest, int32_t sourceLength,
              * and of character; depends on the order of the shapes
              * (isolated, initial, middle, final) in the compatibility area
              */
-            Shape = shapeTable[nextLink & (LINKR + LINKL)]
-                              [lastLink & (LINKR + LINKL)]
-                              [currLink & (LINKR + LINKL)];
+            unsigned int Shape = shapeTable[nextLink & (LINKR + LINKL)][lastLink & (LINKR + LINKL)][currLink & (LINKR + LINKL)];
 
-            if ((currLink & (LINKR+LINKL)) == 1) {
+            if ((currLink & (LINKR + LINKL)) == 1) {
                 Shape &= 1;
-            } else if(isTashkeelChar(dest[i])) {
-                if( (lastLink & LINKL) && (nextLink & LINKR) && (tashkeelFlag == 1) &&
-                     dest[i] != 0x064C && dest[i] != 0x064D )
+            }
+            else if (isTashkeelChar(uchar)) {
+                if ((lastLink & LINKL) && (nextLink & LINKR) && (tashkeelFlag == 1) &&
+                    uchar != 0x064C && uchar != 0x064D)
                 {
                     Shape = 1;
-                    if( (nextLink&ALEFTYPE) == ALEFTYPE && (lastLink&LAMTYPE) == LAMTYPE ) {
+                    if ((nextLink & ALEFTYPE) == ALEFTYPE && (lastLink & LAMTYPE) == LAMTYPE) {
                         Shape = 0;
                     }
-                } else if(tashkeelFlag == 2 && dest[i] == SHADDA06_CHAR){
+                }
+                else if (tashkeelFlag == 2 && uchar == SHADDA06_CHAR) {
                     Shape = 1;
-                } else {
+                }
+                else {
                     Shape = 0;
                 }
             }
-            if ((dest[i] ^ 0x0600) < 0x100) {
-                if ( isTashkeelChar(dest[i]) ){
-                    if (tashkeelFlag == 2  && dest[i] != SHADDA06_CHAR){
-                        dest[i] = TASHKEEL_SPACE_SUB;
-                        tashkeelFound  = 1;
-                    } else {
-                        /* to ensure the array index is within the range */
-                        U_ASSERT(dest[i] >= 0x064Bu
-                            && dest[i]-0x064Bu < UPRV_LENGTHOF(IrrelevantPos));
-                        dest[i] =  0xFE70 + IrrelevantPos[(dest[i] - 0x064B)] + static_cast<UChar>(Shape);
+
+            if ((uchar ^ 0x0600) < 0x100) {
+                if (isTashkeelChar(uchar)) {
+                    if (tashkeelFlag == 2 && uchar != SHADDA06_CHAR) {
+                        int32_t prevNativeLimit = nativeLimit;
+                        utext_replace32(ut, nativeStart, &nativeLimit, TASHKEEL_SPACE_SUB, FALSE, pErrorCode);
+                        lastNativeStart += nativeLimit - prevNativeLimit;
+                        lastNativeLimit += nativeLimit - prevNativeLimit;
+
+                        tashkeelFound = TRUE;
                     }
-                }else if ((currLink & APRESENT) > 0) {
-                    dest[i] = (UChar)(0xFB50 + (currLink >> 8) + Shape);
-                }else if ((currLink >> 8) > 0 && (currLink & IRRELEVANT) == 0) {
-                    dest[i] = (UChar)(0xFE70 + (currLink >> 8) + Shape);
+                    else {
+                        // To ensure the array index is within the range
+                        U_ASSERT(uchar >= 0x064Bu && uchar - 0x064Bu < UPRV_LENGTHOF(IrrelevantPos));
+
+                        int32_t prevNativeLimit = nativeLimit;
+                        utext_replace32(ut, nativeStart, &nativeLimit, 0xFE70 + IrrelevantPos[(uchar - 0x064B)] + static_cast<UChar>(Shape), FALSE, pErrorCode);
+                        lastNativeStart += nativeLimit - prevNativeLimit;
+                        lastNativeLimit += nativeLimit - prevNativeLimit;
+                    }
+                }
+                else if ((currLink & APRESENT) > 0) {
+                    int32_t prevNativeLimit = nativeLimit;
+                    utext_replace32(ut, nativeStart, &nativeLimit, 0xFB50 + (currLink >> 8) + Shape, FALSE, pErrorCode);
+                    lastNativeStart += nativeLimit - prevNativeLimit;
+                    lastNativeLimit += nativeLimit - prevNativeLimit;
+                }
+                else if ((currLink >> 8) > 0 && (currLink & IRRELEVANT) == 0) {
+                    int32_t prevNativeLimit = nativeLimit;
+                    utext_replace32(ut, nativeStart, &nativeLimit, 0xFE70 + (currLink >> 8) + Shape, FALSE, pErrorCode);
+                    lastNativeStart += nativeLimit - prevNativeLimit;
+                    lastNativeLimit += nativeLimit - prevNativeLimit;
                 }
             }
         }
 
-        /* move one notch forward */
+        // Move one notch forward
         if ((currLink & IRRELEVANT) == 0) {
             prevLink = lastLink;
             lastLink = currLink;
-            lastPos = i;
+            lastNativeStart = nativeStart;
+            lastNativeLimit = nativeLimit;
         }
 
-        i = i + step;
-        if (i == Nx) {
+        nativeLimit = nativeStart;
+
+        uchar = UTEXT_PREVIOUS32(ut);
+        nativeStart = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+
+        if (nativeStart == nativeNext) {
             currLink = nextLink;
-            Nx = -2;
-        } else if(i != iend) {
-            currLink = getLink(dest[i]);
+            nativeNext = -1;
+        }
+        else {
+            currLink = getLink(uchar);
         }
     }
-    destSize = sourceLength;
-    if ( (lamalef_found != 0 ) || (tashkeelFound  != 0) ){
-        destSize = handleGeneratedSpaces(dest,sourceLength,destSize,options,pErrorCode, shapeVars);
+
+    int32_t nativeLength = (int32_t)utext_nativeLength(ut);
+
+    if ((lamalefFound) || (tashkeelFound)) {
+        nativeLength = handleGeneratedSpaces(ut, options, pErrorCode, shapeVars);
     }
 
-    if ( (seenfamFound != 0) || (yehhamzaFound != 0) ) {
-        destSize = expandCompositChar(dest, sourceLength,destSize,options,pErrorCode, SHAPE_MODE,shapeVars);
+    if ((seenfamFound) || (yehhamzaFound)) {
+        nativeLength = expandCompositChar(ut, options, pErrorCode, SHAPE_MODE, shapeVars);
     }
-    return destSize;
+
+    return nativeLength;
 }
 
 /*
- *Name     : deShapeUnicode
- *Function : Converts an Arabic Unicode buffer in FExx Range into unshaped
- *           arabic Unicode buffer in 06xx Range
+ * Converts an Arabic Unicode buffer in FExx Range into unshaped
+ * arabic Unicode buffer in 06xx Range
  */
 static int32_t
-deShapeUnicode(UChar *dest, int32_t sourceLength,
-               int32_t destSize,uint32_t options,
-               UErrorCode *pErrorCode, struct uShapeVariables shapeVars) {
-    int32_t i = 0;
-    int32_t lamalef_found = 0;
+deShapeUnicode(UText *ut,
+    uint32_t options,
+    UErrorCode *pErrorCode,
+    struct uShapeVariables shapeVars)
+{
+    if ((pErrorCode == NULL) || (U_FAILURE(*pErrorCode))) {
+        return 0;
+    }
+
+    int32_t lamalefFound = 0;
     int32_t yehHamzaComposeEnabled = 0;
     int32_t seenComposeEnabled = 0;
 
-    yehHamzaComposeEnabled = ((options&U_SHAPE_YEHHAMZA_MASK) == U_SHAPE_YEHHAMZA_TWOCELL_NEAR) ? 1 : 0;
-    seenComposeEnabled = ((options&U_SHAPE_SEEN_MASK) == U_SHAPE_SEEN_TWOCELL_NEAR)? 1 : 0;
+    yehHamzaComposeEnabled = ((options & U_SHAPE_YEHHAMZA_MASK) == U_SHAPE_YEHHAMZA_TWOCELL_NEAR) ? 1 : 0;
+    seenComposeEnabled = ((options & U_SHAPE_SEEN_MASK) == U_SHAPE_SEEN_TWOCELL_NEAR) ? 1 : 0;
 
     /*
-     *This for loop changes the buffer from the Unicode FE range to
-     *the Unicode 06 range
+     * This for loop changes the buffer from the Unicode FE range to
+     * the Unicode 06 range
      */
 
-    for(i = 0; i < sourceLength; i++) {
-        UChar  inputChar = dest[i];
-        if ( (inputChar >= 0xFB50) && (inputChar <= 0xFBFF)) { /* FBxx Arabic range */
-            UChar c = convertFBto06 [ (inputChar - 0xFB50) ];
+    utext_setNativeIndex(ut, 0);
+    int32_t nativeStart = 0;
+    UChar32 uchar = UTEXT_NEXT32(ut);
+    int32_t nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+    for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL);
+        nativeStart = nativeLimit, uchar = UTEXT_NEXT32(ut), nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut))
+    {
+        UChar32 uchar2 = UTEXT_NEXT32(ut);
+        if (uchar2 != U_SENTINEL)
+            UTEXT_PREVIOUS32(ut);
+
+        if ((uchar >= 0xFB50) && (uchar <= 0xFBFF)) { // FBxx Arabic range
+            UChar c = convertFBto06[(uchar - 0xFB50)];
             if (c != 0)
-                dest[i] = c;
-        } else if( (yehHamzaComposeEnabled == 1) && ((inputChar == HAMZA06_CHAR) || (inputChar == HAMZAFE_CHAR))
-                && (i < (sourceLength - 1)) && isAlefMaksouraChar(dest[i+1] )) {
-                 dest[i] = SPACE_CHAR;
-                 dest[i+1] = YEH_HAMZA_CHAR;
-        } else if ( (seenComposeEnabled == 1) && (isTailChar(inputChar)) && (i< (sourceLength - 1))
-                        && (isSeenTailFamilyChar(dest[i+1])) ) {
-                dest[i] = SPACE_CHAR;
-        } else if (( inputChar >= 0xFE70) && (inputChar <= 0xFEF4 )) { /* FExx Arabic range */
-                dest[i] = convertFEto06 [ (inputChar - 0xFE70) ];
-        } else {
-            dest[i] = inputChar ;
+                utext_replace32(ut, nativeStart, &nativeLimit, c, TRUE, pErrorCode);
+        }
+        else if ((yehHamzaComposeEnabled == 1) && ((uchar == HAMZA06_CHAR) || (uchar == HAMZAFE_CHAR))
+            && isAlefMaksouraChar(uchar2)) {
+            utext_replace32(ut, nativeStart, &nativeLimit, SPACE_CHAR, TRUE, pErrorCode);
+
+            nativeStart = nativeLimit;
+            uchar = UTEXT_NEXT32(ut);
+            nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+            utext_replace32(ut, nativeStart, &nativeLimit, YEH_HAMZA_CHAR, TRUE, pErrorCode);
+        }
+        else if ((seenComposeEnabled == 1) && (isTailChar(uchar)) && (isSeenTailFamilyChar(uchar2))) {
+            utext_replace32(ut, nativeStart, &nativeLimit, SPACE_CHAR, TRUE, pErrorCode);
+        }
+        else if ((uchar >= 0xFE70) && (uchar <= 0xFEF4)) { // FExx Arabic range
+            utext_replace32(ut, nativeStart, &nativeLimit, convertFEto06[(uchar - 0xFE70)], TRUE, pErrorCode);
         }
 
-        if( isLamAlefChar(dest[i]) )
-            lamalef_found = 1;
+        if (isLamAlefChar(uchar))
+            lamalefFound = 1;
     }
 
-   destSize = sourceLength;
-   if (lamalef_found != 0){
-          destSize = expandCompositChar(dest,sourceLength,destSize,options,pErrorCode,DESHAPE_MODE, shapeVars);
-   }
-   return destSize;
+    if (lamalefFound != 0) {
+        nativeLimit = expandCompositChar(ut, options, pErrorCode, DESHAPE_MODE, shapeVars);
+    }
+
+    return nativeLimit;
+}
+
+static int32_t
+shapeToArabicDigits(UText *ut,
+    UChar32 digitBase,
+    uint32_t options,
+    UErrorCode *pErrorCode)
+{
+    //if ((pErrorCode == NULL) || (U_FAILURE(*pErrorCode))) {
+    //    return 0;
+    //}
+
+    utext_setNativeIndex(ut, 0);
+    int32_t nativeStart = 0;
+    UChar32 uchar = UTEXT_NEXT32(ut);
+    int32_t nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+    for (; /*(!U_FAILURE(*pErrorCode)) &&*/ (uchar != U_SENTINEL);
+        nativeStart = nativeLimit, uchar = UTEXT_NEXT32(ut), nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut))
+    {
+        switch (options & U_SHAPE_DIGITS_MASK) {
+        case U_SHAPE_DIGITS_EN2AN:
+            // Add (digitBase-'0') to each European (ASCII) digit code point
+            if (((uchar - 0x30) >= 0) && ((uchar - 0x30) < 10)) {
+                utext_replace32(ut, nativeStart, &nativeLimit, uchar + (digitBase - 0x30), TRUE, pErrorCode);
+            }
+            break;
+        case U_SHAPE_DIGITS_AN2EN:
+            // Subtract (digitBase-'0') from each Arabic digit code point
+            if (((uchar - digitBase) >= 0) && ((uchar - digitBase) < 10)) {
+                utext_replace32(ut, nativeStart, &nativeLimit, uchar - (digitBase - 0x30), TRUE, pErrorCode);
+            }
+            break;
+        }
+    }
+
+    return nativeLimit;
+}
+
+/*
+ * This function shapes European digits to Arabic-Indic digits
+ * in-place, writing over the input characters.
+ */
+static int32_t
+shapeToArabicDigitsWithContext(UText *ut,
+    UChar32 digitBase,
+    UBool isLogical,
+    UBool lastStrongWasAL,
+    UErrorCode *pErrorCode)
+{
+    //if ((pErrorCode == NULL) || (U_FAILURE(*pErrorCode))) {
+    //    return 0;
+    //}
+
+    digitBase -= 0x30;
+
+    // Iteration direction depends on the type of input
+    if (isLogical)
+    {
+        utext_setNativeIndex(ut, 0);
+        int32_t nativeStart = 0;
+        UChar32 uchar = UTEXT_NEXT32(ut);
+        int32_t nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+        for (; /*(!U_FAILURE(*pErrorCode)) &&*/ (uchar != U_SENTINEL);
+            nativeStart = nativeLimit, uchar = UTEXT_NEXT32(ut), nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut))
+        {
+            switch (ubidi_getClass(uchar))
+            {
+            case U_LEFT_TO_RIGHT: // L
+            case U_RIGHT_TO_LEFT: // R
+                lastStrongWasAL = FALSE;
+                break;
+            case U_RIGHT_TO_LEFT_ARABIC: // AL
+                lastStrongWasAL = TRUE;
+                break;
+            case U_EUROPEAN_NUMBER: // EN
+                if ((lastStrongWasAL) && ((uchar - 0x30) >= 0) && ((uchar - 0x30) < 10)) {
+                    utext_replace32(ut, nativeStart, &nativeLimit, digitBase + uchar, TRUE, pErrorCode);
+                }
+                break;
+            default:
+                break;
+            }
+        }
+
+        return nativeLimit;
+    }
+    else
+    {
+        utext_setNativeIndex(ut, utext_nativeLength(ut));
+        int32_t nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+        UChar32 uchar = UTEXT_PREVIOUS32(ut);
+        int32_t nativeStart = (int32_t)UTEXT_GETNATIVEINDEX(ut);
+        for (; /*(!U_FAILURE(*pErrorCode)) &&*/ (uchar != U_SENTINEL);
+            nativeLimit = nativeStart, uchar = UTEXT_PREVIOUS32(ut), nativeStart = (int32_t)UTEXT_GETNATIVEINDEX(ut))
+        {
+            switch (ubidi_getClass(uchar))
+            {
+            case U_LEFT_TO_RIGHT: // L
+            case U_RIGHT_TO_LEFT: // R
+                lastStrongWasAL = FALSE;
+                break;
+            case U_RIGHT_TO_LEFT_ARABIC: // AL
+                lastStrongWasAL = TRUE;
+                break;
+            case U_EUROPEAN_NUMBER: // EN
+                if ((lastStrongWasAL) && ((uchar - 0x30) >= 0) && ((uchar - 0x30) < 10)) {
+                    utext_replace32(ut, nativeStart, &nativeLimit, digitBase + uchar, FALSE, pErrorCode);
+                }
+                break;
+            default:
+                break;
+            }
+        }
+
+        return (int32_t)utext_nativeLength(ut);
+    }
 }
 
 /*
@@ -1417,312 +1661,252 @@ deShapeUnicode(UChar *dest, int32_t sourceLength,
  ****************************************
  */
 
-U_CAPI int32_t U_EXPORT2
-u_shapeArabic(const UChar *source, int32_t sourceLength,
-              UChar *dest, int32_t destCapacity,
-              uint32_t options,
-              UErrorCode *pErrorCode) {
+U_STABLE int32_t U_EXPORT2
+u_shapeUText(UText *srcUt, UText *dstUt,
+    uint32_t options,
+    UErrorCode *pErrorCode) {
 
-    int32_t destLength;
-    struct  uShapeVariables shapeVars = { OLD_TAIL_CHAR,U_SHAPE_LAMALEF_BEGIN,U_SHAPE_LAMALEF_END,U_SHAPE_TASHKEEL_BEGIN,U_SHAPE_TASHKEEL_END,0};
-
-    /* usual error checking */
-    if(pErrorCode==NULL || U_FAILURE(*pErrorCode)) {
+    if ((pErrorCode == NULL) || (U_FAILURE(*pErrorCode))) {
         return 0;
     }
 
-    /* make sure that no reserved options values are used; allow dest==NULL only for preflighting */
-    if( source==NULL || sourceLength<-1 || (dest==NULL && destCapacity!=0) || destCapacity<0 ||
-                (((options&U_SHAPE_TASHKEEL_MASK) > 0) &&
-                 ((options&U_SHAPE_LETTERS_SHAPE_TASHKEEL_ISOLATED) == U_SHAPE_LETTERS_SHAPE_TASHKEEL_ISOLATED) ) ||
-                (((options&U_SHAPE_TASHKEEL_MASK) > 0) &&
-                 ((options&U_SHAPE_LETTERS_MASK) == U_SHAPE_LETTERS_UNSHAPE)) ||
-                (options&U_SHAPE_DIGIT_TYPE_RESERVED)==U_SHAPE_DIGIT_TYPE_RESERVED ||
-                (options&U_SHAPE_DIGITS_MASK)==U_SHAPE_DIGITS_RESERVED ||
-                ((options&U_SHAPE_LAMALEF_MASK) != U_SHAPE_LAMALEF_RESIZE  &&
-                (options&U_SHAPE_AGGREGATE_TASHKEEL_MASK) != 0) ||
-                ((options&U_SHAPE_AGGREGATE_TASHKEEL_MASK) == U_SHAPE_AGGREGATE_TASHKEEL &&
-                (options&U_SHAPE_LETTERS_SHAPE_TASHKEEL_ISOLATED) != U_SHAPE_LETTERS_SHAPE_TASHKEEL_ISOLATED)
-    )
+    if (srcUt == NULL || dstUt == NULL) {
+        *pErrorCode = U_ILLEGAL_ARGUMENT_ERROR;
+        return 0;
+    }
+
+    if (!utext_isWritable(dstUt)) {
+        *pErrorCode = U_NO_WRITE_PERMISSION;
+        return 0;
+    }
+
+    // Do input and output overlap?
+    if (utext_equals(srcUt, dstUt)) {
+        *pErrorCode = U_ILLEGAL_ARGUMENT_ERROR;
+        return 0;
+    }
+
+    // Make sure that no reserved options values are used.
+    if ((((options & U_SHAPE_TASHKEEL_MASK) > 0) &&
+        ((options & U_SHAPE_LETTERS_SHAPE_TASHKEEL_ISOLATED) == U_SHAPE_LETTERS_SHAPE_TASHKEEL_ISOLATED)) ||
+        (((options & U_SHAPE_TASHKEEL_MASK) > 0) &&
+        ((options & U_SHAPE_LETTERS_MASK) == U_SHAPE_LETTERS_UNSHAPE)) ||
+            (options & U_SHAPE_DIGIT_TYPE_RESERVED) == U_SHAPE_DIGIT_TYPE_RESERVED ||
+        (options & U_SHAPE_DIGITS_MASK) == U_SHAPE_DIGITS_RESERVED ||
+        ((options & U_SHAPE_LAMALEF_MASK) != U_SHAPE_LAMALEF_RESIZE &&
+        (options & U_SHAPE_AGGREGATE_TASHKEEL_MASK) != 0) ||
+            ((options & U_SHAPE_AGGREGATE_TASHKEEL_MASK) == U_SHAPE_AGGREGATE_TASHKEEL &&
+        (options & U_SHAPE_LETTERS_SHAPE_TASHKEEL_ISOLATED) != U_SHAPE_LETTERS_SHAPE_TASHKEEL_ISOLATED)
+        )
     {
-        *pErrorCode=U_ILLEGAL_ARGUMENT_ERROR;
-        return 0;
-    }
-    /* Validate  lamalef options */
-    if(((options&U_SHAPE_LAMALEF_MASK) > 0)&&
-              !(((options & U_SHAPE_LAMALEF_MASK)==U_SHAPE_LAMALEF_BEGIN) ||
-                ((options & U_SHAPE_LAMALEF_MASK)==U_SHAPE_LAMALEF_END ) ||
-                ((options & U_SHAPE_LAMALEF_MASK)==U_SHAPE_LAMALEF_RESIZE )||
-                 ((options & U_SHAPE_LAMALEF_MASK)==U_SHAPE_LAMALEF_AUTO) ||
-                 ((options & U_SHAPE_LAMALEF_MASK)==U_SHAPE_LAMALEF_NEAR)))
-    {
-         *pErrorCode=U_ILLEGAL_ARGUMENT_ERROR;
-        return 0;
-    }
-    /* Validate  Tashkeel options */
-    if(((options&U_SHAPE_TASHKEEL_MASK) > 0)&&
-                   !(((options & U_SHAPE_TASHKEEL_MASK)==U_SHAPE_TASHKEEL_BEGIN) ||
-                     ((options & U_SHAPE_TASHKEEL_MASK)==U_SHAPE_TASHKEEL_END )
-                    ||((options & U_SHAPE_TASHKEEL_MASK)==U_SHAPE_TASHKEEL_RESIZE )||
-                    ((options & U_SHAPE_TASHKEEL_MASK)==U_SHAPE_TASHKEEL_REPLACE_BY_TATWEEL)))
-    {
-         *pErrorCode=U_ILLEGAL_ARGUMENT_ERROR;
-        return 0;
-    }
-    /* determine the source length */
-    if(sourceLength==-1) {
-        sourceLength=u_strlen(source);
-    }
-    if(sourceLength<=0) {
-        return u_terminateUChars(dest, destCapacity, 0, pErrorCode);
-    }
-
-    /* check that source and destination do not overlap */
-    if( dest!=NULL &&
-        ((source<=dest && dest<source+sourceLength) ||
-         (dest<=source && source<dest+destCapacity))) {
-        *pErrorCode=U_ILLEGAL_ARGUMENT_ERROR;
+        *pErrorCode = U_ILLEGAL_ARGUMENT_ERROR;
         return 0;
     }
 
-    /* Does Options contain the new Seen Tail Unicode code point option */
-    if ( (options&U_SHAPE_TAIL_TYPE_MASK) == U_SHAPE_TAIL_NEW_UNICODE){
+    // Validate lamalef options.
+    if (((options & U_SHAPE_LAMALEF_MASK) > 0) &&
+        !(((options & U_SHAPE_LAMALEF_MASK) == U_SHAPE_LAMALEF_BEGIN) ||
+        ((options & U_SHAPE_LAMALEF_MASK) == U_SHAPE_LAMALEF_END) ||
+            ((options & U_SHAPE_LAMALEF_MASK) == U_SHAPE_LAMALEF_RESIZE) ||
+            ((options & U_SHAPE_LAMALEF_MASK) == U_SHAPE_LAMALEF_AUTO) ||
+            ((options & U_SHAPE_LAMALEF_MASK) == U_SHAPE_LAMALEF_NEAR)))
+    {
+        *pErrorCode = U_ILLEGAL_ARGUMENT_ERROR;
+        return 0;
+    }
+
+    // Validate Tashkeel options.
+    if (((options & U_SHAPE_TASHKEEL_MASK) > 0) &&
+        !(((options & U_SHAPE_TASHKEEL_MASK) == U_SHAPE_TASHKEEL_BEGIN) ||
+        ((options & U_SHAPE_TASHKEEL_MASK) == U_SHAPE_TASHKEEL_END)
+            || ((options & U_SHAPE_TASHKEEL_MASK) == U_SHAPE_TASHKEEL_RESIZE) ||
+            ((options & U_SHAPE_TASHKEEL_MASK) == U_SHAPE_TASHKEEL_REPLACE_BY_TATWEEL)))
+    {
+        *pErrorCode = U_ILLEGAL_ARGUMENT_ERROR;
+        return 0;
+    }
+
+    struct uShapeVariables shapeVars = { OLD_TAIL_CHAR,U_SHAPE_LAMALEF_BEGIN,U_SHAPE_LAMALEF_END,U_SHAPE_TASHKEEL_BEGIN,U_SHAPE_TASHKEEL_END,0 };
+    int32_t dstNativeLength = 0;
+
+    // Does Options contain the new Seen Tail Unicode code point option
+    if ((options & U_SHAPE_TAIL_TYPE_MASK) == U_SHAPE_TAIL_NEW_UNICODE) {
         shapeVars.tailChar = NEW_TAIL_CHAR;
-    }else {
+    }
+    else {
         shapeVars.tailChar = OLD_TAIL_CHAR;
     }
 
-    if((options&U_SHAPE_LETTERS_MASK)!=U_SHAPE_LETTERS_NOOP) {
-        UChar buffer[300];
-        UChar *tempbuffer, *tempsource = NULL;
-        int32_t outputSize, spacesCountl=0, spacesCountr=0;
+    dstNativeLength = (int32_t)utext_copyUText(dstUt, srcUt, pErrorCode);
+    if (!U_FAILURE(*pErrorCode))
+    {
+        // Perform letter shaping.
+        if ((options & U_SHAPE_LETTERS_MASK) != U_SHAPE_LETTERS_NOOP) {
+            int32_t nativeSpacesLeft = 0;
+            int32_t nativeSpacesRight = 0;
 
-        if((options&U_SHAPE_AGGREGATE_TASHKEEL_MASK)>0) {
-            int32_t logical_order = (options&U_SHAPE_TEXT_DIRECTION_MASK) == U_SHAPE_TEXT_DIRECTION_LOGICAL;
-            int32_t aggregate_tashkeel =
-                        (options&(U_SHAPE_AGGREGATE_TASHKEEL_MASK+U_SHAPE_LETTERS_SHAPE_TASHKEEL_ISOLATED)) ==
-                        (U_SHAPE_AGGREGATE_TASHKEEL+U_SHAPE_LETTERS_SHAPE_TASHKEEL_ISOLATED);
-            int step=logical_order?1:-1;
-            int j=logical_order?-1:2*sourceLength;
-            int i=logical_order?-1:sourceLength;
-            int end=logical_order?sourceLength:-1;
-            int aggregation_possible = 1;
-            UChar prev = 0;
-            UChar prevLink, currLink = 0;
-            int newSourceLength = 0;
-            tempsource = (UChar *)uprv_malloc(2*sourceLength*U_SIZEOF_UCHAR);
-            if(tempsource == NULL) {
-                *pErrorCode = U_MEMORY_ALLOCATION_ERROR;
-                return 0;
+            if ((options & U_SHAPE_AGGREGATE_TASHKEEL_MASK) > 0) {
+                dstNativeLength = handleAggregateTashkeel(dstUt, options, pErrorCode);
             }
 
-            while ((i+=step) != end) {
-                prevLink = currLink;
-                currLink = getLink(source[i]);
-                if (aggregate_tashkeel && ((prevLink|currLink)&COMBINE) == COMBINE && aggregation_possible) {
-                    aggregation_possible = 0;
-                    tempsource[j] = (prev<source[i]?prev:source[i])-0x064C+0xFC5E;
-                    currLink = getLink(tempsource[j]);
-                } else {
-                    aggregation_possible = 1;
-                    tempsource[j+=step] = source[i];
-                    prev = source[i];
-                    newSourceLength++;
+            // Start of Arabic letter shaping part.
+
+            if ((options & U_SHAPE_TEXT_DIRECTION_MASK) == U_SHAPE_TEXT_DIRECTION_LOGICAL) {
+                countSpaces(dstUt, options, &nativeSpacesLeft, &nativeSpacesRight);
+                invertBuffer(dstUt, options, nativeSpacesLeft, (int32_t)utext_nativeLength(dstUt) - nativeSpacesRight, pErrorCode);
+            }
+
+            if ((options & U_SHAPE_TEXT_DIRECTION_MASK) == U_SHAPE_TEXT_DIRECTION_VISUAL_LTR) {
+                if ((options & U_SHAPE_SPACES_RELATIVE_TO_TEXT_MASK) == U_SHAPE_SPACES_RELATIVE_TO_TEXT_BEGIN_END) {
+                    shapeVars.spacesRelativeToTextBeginEnd = 1;
+                    shapeVars.uShapeLamalefBegin = U_SHAPE_LAMALEF_END;
+                    shapeVars.uShapeLamalefEnd = U_SHAPE_LAMALEF_BEGIN;
+                    shapeVars.uShapeTashkeelBegin = U_SHAPE_TASHKEEL_END;
+                    shapeVars.uShapeTashkeelEnd = U_SHAPE_TASHKEEL_BEGIN;
                 }
             }
-            source = tempsource+(logical_order?0:j);
-            sourceLength = newSourceLength;
-        }
 
-        /* calculate destination size */
-        /* TODO: do we ever need to do this pure preflighting? */
-        if(((options&U_SHAPE_LAMALEF_MASK)==U_SHAPE_LAMALEF_RESIZE) ||
-           ((options&U_SHAPE_TASHKEEL_MASK)==U_SHAPE_TASHKEEL_RESIZE)) {
-            outputSize=calculateSize(source,sourceLength,destCapacity,options);
-        } else {
-            outputSize=sourceLength;
-        }
-
-        if(outputSize>destCapacity) {
-            *pErrorCode=U_BUFFER_OVERFLOW_ERROR;
-                if (tempsource != NULL) uprv_free(tempsource);
-            return outputSize;
-        }
-
-        /*
-         * need a temporary buffer of size max(outputSize, sourceLength)
-         * because at first we copy source->temp
-         */
-        if(sourceLength>outputSize) {
-            outputSize=sourceLength;
-        }
-
-        /* Start of Arabic letter shaping part */
-        if(outputSize<=UPRV_LENGTHOF(buffer)) {
-            outputSize=UPRV_LENGTHOF(buffer);
-            tempbuffer=buffer;
-        } else {
-            tempbuffer = (UChar *)uprv_malloc(outputSize*U_SIZEOF_UCHAR);
-
-            /*Test for NULL*/
-            if(tempbuffer == NULL) {
-                *pErrorCode = U_MEMORY_ALLOCATION_ERROR;
-                if (tempsource != NULL) uprv_free(tempsource);
-                return 0;
-            }
-        }
-        u_memcpy(tempbuffer, source, sourceLength);
-        if (tempsource != NULL){
-            uprv_free(tempsource);
-        }
-
-        if(sourceLength<outputSize) {
-            uprv_memset(tempbuffer+sourceLength, 0, (outputSize-sourceLength)*U_SIZEOF_UCHAR);
-        }
-
-        if((options&U_SHAPE_TEXT_DIRECTION_MASK) == U_SHAPE_TEXT_DIRECTION_LOGICAL) {
-            countSpaces(tempbuffer,sourceLength,options,&spacesCountl,&spacesCountr);
-            invertBuffer(tempbuffer,sourceLength,options,spacesCountl,spacesCountr);
-        }
-
-        if((options&U_SHAPE_TEXT_DIRECTION_MASK) == U_SHAPE_TEXT_DIRECTION_VISUAL_LTR) {
-            if((options&U_SHAPE_SPACES_RELATIVE_TO_TEXT_MASK) == U_SHAPE_SPACES_RELATIVE_TO_TEXT_BEGIN_END) {
-                shapeVars.spacesRelativeToTextBeginEnd = 1;
-                shapeVars.uShapeLamalefBegin = U_SHAPE_LAMALEF_END;
-                shapeVars.uShapeLamalefEnd = U_SHAPE_LAMALEF_BEGIN;
-                shapeVars.uShapeTashkeelBegin = U_SHAPE_TASHKEEL_END;
-                shapeVars.uShapeTashkeelEnd = U_SHAPE_TASHKEEL_BEGIN;
-            }
-        }
-
-        switch(options&U_SHAPE_LETTERS_MASK) {
-        case U_SHAPE_LETTERS_SHAPE :
-             if( (options&U_SHAPE_TASHKEEL_MASK)> 0
-                 && ((options&U_SHAPE_TASHKEEL_MASK) !=U_SHAPE_TASHKEEL_REPLACE_BY_TATWEEL)) {
-                /* Call the shaping function with tashkeel flag == 2 for removal of tashkeel */
-                destLength = shapeUnicode(tempbuffer,sourceLength,destCapacity,options,pErrorCode,2,shapeVars);
-             }else {
-                /* default Call the shaping function with tashkeel flag == 1 */
-                destLength = shapeUnicode(tempbuffer,sourceLength,destCapacity,options,pErrorCode,1,shapeVars);
-
-                /*After shaping text check if user wants to remove tashkeel and replace it with tatweel*/
-                if( (options&U_SHAPE_TASHKEEL_MASK) == U_SHAPE_TASHKEEL_REPLACE_BY_TATWEEL){
-                  destLength = handleTashkeelWithTatweel(tempbuffer,destLength,destCapacity,options,pErrorCode);
+            switch (options & U_SHAPE_LETTERS_MASK) {
+            case U_SHAPE_LETTERS_SHAPE:
+                if ((options & U_SHAPE_TASHKEEL_MASK) > 0
+                    && ((options & U_SHAPE_TASHKEEL_MASK) != U_SHAPE_TASHKEEL_REPLACE_BY_TATWEEL)) {
+                    // Call the shaping function with tashkeel flag == 2 for removal of tashkeel
+                    dstNativeLength = shapeUnicode(dstUt, options, pErrorCode, 2, shapeVars);
                 }
-            }
-            break;
-        case U_SHAPE_LETTERS_SHAPE_TASHKEEL_ISOLATED :
-            /* Call the shaping function with tashkeel flag == 0 */
-            destLength = shapeUnicode(tempbuffer,sourceLength,destCapacity,options,pErrorCode,0,shapeVars);
-            break;
+                else {
+                    // Default Call the shaping function with tashkeel flag == 1
+                    dstNativeLength = shapeUnicode(dstUt, options, pErrorCode, 1, shapeVars);
 
-        case U_SHAPE_LETTERS_UNSHAPE :
-            /* Call the deshaping function */
-            destLength = deShapeUnicode(tempbuffer,sourceLength,destCapacity,options,pErrorCode,shapeVars);
-            break;
-        default :
-            /* will never occur because of validity checks above */
-            destLength = 0;
-            break;
-        }
-
-        /*
-         * TODO: (markus 2002aug01)
-         * For as long as we always preflight the outputSize above
-         * we should U_ASSERT(outputSize==destLength)
-         * except for the adjustment above before the tempbuffer allocation
-         */
-
-        if((options&U_SHAPE_TEXT_DIRECTION_MASK) == U_SHAPE_TEXT_DIRECTION_LOGICAL) {
-            countSpaces(tempbuffer,destLength,options,&spacesCountl,&spacesCountr);
-            invertBuffer(tempbuffer,destLength,options,spacesCountl,spacesCountr);
-        }
-        u_memcpy(dest, tempbuffer, uprv_min(destLength, destCapacity));
-
-        if(tempbuffer!=buffer) {
-            uprv_free(tempbuffer);
-        }
-
-        if(destLength>destCapacity) {
-            *pErrorCode=U_BUFFER_OVERFLOW_ERROR;
-            return destLength;
-        }
-
-        /* End of Arabic letter shaping part */
-    } else {
-        /*
-         * No letter shaping:
-         * just make sure the destination is large enough and copy the string.
-         */
-        if(destCapacity<sourceLength) {
-            /* this catches preflighting, too */
-            *pErrorCode=U_BUFFER_OVERFLOW_ERROR;
-            return sourceLength;
-        }
-        u_memcpy(dest, source, sourceLength);
-        destLength=sourceLength;
-    }
-
-    /*
-     * Perform number shaping.
-     * With UTF-16 or UTF-32, the length of the string is constant.
-     * The easiest way to do this is to operate on the destination and
-     * "shape" the digits in-place.
-     */
-    if((options&U_SHAPE_DIGITS_MASK)!=U_SHAPE_DIGITS_NOOP) {
-        UChar digitBase;
-        int32_t i;
-
-        /* select the requested digit group */
-        switch(options&U_SHAPE_DIGIT_TYPE_MASK) {
-        case U_SHAPE_DIGIT_TYPE_AN:
-            digitBase=0x660; /* Unicode: "Arabic-Indic digits" */
-            break;
-        case U_SHAPE_DIGIT_TYPE_AN_EXTENDED:
-            digitBase=0x6f0; /* Unicode: "Eastern Arabic-Indic digits (Persian and Urdu)" */
-            break;
-        default:
-            /* will never occur because of validity checks above */
-            digitBase=0;
-            break;
-        }
-
-        /* perform the requested operation */
-        switch(options&U_SHAPE_DIGITS_MASK) {
-        case U_SHAPE_DIGITS_EN2AN:
-            /* add (digitBase-'0') to each European (ASCII) digit code point */
-            digitBase-=0x30;
-            for(i=0; i<destLength; ++i) {
-                if(((uint32_t)dest[i]-0x30)<10) {
-                    dest[i]+=digitBase;
+                    // After shaping text check if user wants to remove tashkeel and replace it with tatweel
+                    if ((options & U_SHAPE_TASHKEEL_MASK) == U_SHAPE_TASHKEEL_REPLACE_BY_TATWEEL) {
+                        dstNativeLength = handleTashkeelWithTatweel(dstUt, options, pErrorCode);
+                    }
                 }
+                break;
+            case U_SHAPE_LETTERS_SHAPE_TASHKEEL_ISOLATED:
+                // Call the shaping function with tashkeel flag == 0
+                dstNativeLength = shapeUnicode(dstUt, options, pErrorCode, 0, shapeVars);
+                break;
+
+            case U_SHAPE_LETTERS_UNSHAPE:
+                // Call the deshaping function
+                dstNativeLength = deShapeUnicode(dstUt, options, pErrorCode, shapeVars);
+                break;
+            default:
+                // Will never occur because of validity checks above
+                break;
             }
-            break;
-        case U_SHAPE_DIGITS_AN2EN:
-            /* subtract (digitBase-'0') from each Arabic digit code point */
-            for(i=0; i<destLength; ++i) {
-                if(((uint32_t)dest[i]-(uint32_t)digitBase)<10) {
-                    dest[i]-=digitBase-0x30;
-                }
+
+            if (*pErrorCode == U_NO_SPACE_AVAILABLE)
+                *pErrorCode = U_ZERO_ERROR;
+
+            if ((options & U_SHAPE_TEXT_DIRECTION_MASK) == U_SHAPE_TEXT_DIRECTION_LOGICAL) {
+                countSpaces(dstUt, options, &nativeSpacesLeft, &nativeSpacesRight);
+                invertBuffer(dstUt, options, nativeSpacesLeft, (int32_t)utext_nativeLength(dstUt) - nativeSpacesRight, pErrorCode);
             }
-            break;
-        case U_SHAPE_DIGITS_ALEN2AN_INIT_LR:
-            _shapeToArabicDigitsWithContext(dest, destLength,
-                                            digitBase,
-                                            (UBool)((options&U_SHAPE_TEXT_DIRECTION_MASK)==U_SHAPE_TEXT_DIRECTION_LOGICAL),
-                                            FALSE);
-            break;
-        case U_SHAPE_DIGITS_ALEN2AN_INIT_AL:
-            _shapeToArabicDigitsWithContext(dest, destLength,
-                                            digitBase,
-                                            (UBool)((options&U_SHAPE_TEXT_DIRECTION_MASK)==U_SHAPE_TEXT_DIRECTION_LOGICAL),
-                                            TRUE);
-            break;
-        default:
-            /* will never occur because of validity checks above */
-            break;
+
+            // End of Arabic letter shaping part.
         }
     }
 
-    return u_terminateUChars(dest, destCapacity, destLength, pErrorCode);
+    if ((!U_FAILURE(*pErrorCode)) || (*pErrorCode == U_BUFFER_OVERFLOW_ERROR))
+    {
+        // Perform number shaping.
+        if ((options & U_SHAPE_DIGITS_MASK) != U_SHAPE_DIGITS_NOOP) {
+            UChar digitBase;
+
+            // Select the requested digit group
+            switch (options & U_SHAPE_DIGIT_TYPE_MASK) {
+            case U_SHAPE_DIGIT_TYPE_AN:
+                digitBase = 0x660; // Unicode: "Arabic-Indic digits"
+                break;
+            case U_SHAPE_DIGIT_TYPE_AN_EXTENDED:
+                digitBase = 0x6f0; // Unicode: "Eastern Arabic-Indic digits (Persian and Urdu)"
+                break;
+            default:
+                // Will never occur because of validity checks above
+                digitBase = 0;
+                break;
+            }
+
+            // Perform the requested operation
+            switch (options & U_SHAPE_DIGITS_MASK) {
+            case U_SHAPE_DIGITS_EN2AN:
+            case U_SHAPE_DIGITS_AN2EN:
+                dstNativeLength = shapeToArabicDigits(*pErrorCode == U_BUFFER_OVERFLOW_ERROR ? srcUt : dstUt, digitBase, options, pErrorCode);
+                break;
+            case U_SHAPE_DIGITS_ALEN2AN_INIT_LR:
+                dstNativeLength = shapeToArabicDigitsWithContext(*pErrorCode == U_BUFFER_OVERFLOW_ERROR ? srcUt : dstUt,
+                    digitBase,
+                    (UBool)((options & U_SHAPE_TEXT_DIRECTION_MASK) == U_SHAPE_TEXT_DIRECTION_LOGICAL),
+                    FALSE,
+                    pErrorCode);
+                break;
+            case U_SHAPE_DIGITS_ALEN2AN_INIT_AL:
+                dstNativeLength = shapeToArabicDigitsWithContext(*pErrorCode == U_BUFFER_OVERFLOW_ERROR ? srcUt : dstUt,
+                    digitBase,
+                    (UBool)((options & U_SHAPE_TEXT_DIRECTION_MASK) == U_SHAPE_TEXT_DIRECTION_LOGICAL),
+                    TRUE,
+                    pErrorCode);
+                break;
+            default:
+                // Will never occur because of validity checks above
+                break;
+            }
+        }
+    }
+
+    return dstNativeLength;
+}
+
+U_CAPI int32_t U_EXPORT2
+u_shapeArabic(const UChar *src, int32_t srcLength,
+    UChar *dest, int32_t destSize,
+    uint32_t options,
+    UErrorCode *pErrorCode) {
+
+    if ((pErrorCode == NULL) || (U_FAILURE(*pErrorCode))) {
+        return 0;
+    }
+
+    if ((src == NULL) || (srcLength < -1)
+        || (destSize < 0) || ((destSize > 0) && (dest == NULL))
+        ) {
+        *pErrorCode = U_ILLEGAL_ARGUMENT_ERROR;
+        return 0;
+    }
+
+    // Do input and output overlap?
+    if ((dest != NULL) && ((src >= dest && src < dest + destSize)
+        || (dest >= src && dest < src + srcLength))) {
+        *pErrorCode = U_ILLEGAL_ARGUMENT_ERROR;
+        return 0;
+    }
+
+    UText srcUt = UTEXT_INITIALIZER;
+    utext_openUChars(&srcUt, src, srcLength, pErrorCode);
+    if (U_FAILURE(*pErrorCode))
+        return 0;
+
+    UText dstUt = UTEXT_INITIALIZER;
+    UChar preFlight[1];
+    if (dest == NULL) {
+        utext_openU16(&dstUt, preFlight, 0, 0, pErrorCode);
+        if (U_FAILURE(*pErrorCode))
+            return 0;
+    }
+    else {
+        utext_openU16(&dstUt, dest, 0, destSize, pErrorCode);
+        if (U_FAILURE(*pErrorCode))
+            return 0;
+    }
+
+    // A stack allocated UText wrapping a UChar * string
+    // can be dumped without explicitly closing it.
+    int32_t length = u_shapeUText(&srcUt, &dstUt, options, pErrorCode);
+
+    utext_close(&srcUt);
+    utext_close(&dstUt);
+
+    return length;
 }

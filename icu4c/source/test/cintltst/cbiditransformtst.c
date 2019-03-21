@@ -17,6 +17,7 @@
 #include "unicode/ushape.h"
 #include "unicode/ustring.h"
 #include "unicode/utf16.h"
+#include "unicode/ucnv.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -177,6 +178,7 @@ testAutoDirection(void)
         srcLen = u_strlen(src);
         for (i = 0; i < nInLevels; i++) {
             for (j = 0; j < nOutLevels; j++) {
+                errorCode = U_ZERO_ERROR;
                 ubiditransform_transform(pTransform, src, -1, dest, STR_CAPACITY - 1,
                         inLevels[i], UBIDI_LOGICAL, outLevels[j], UBIDI_VISUAL,
                         UBIDI_MIRRORING_OFF, 0, &errorCode);
@@ -257,6 +259,157 @@ verifyResultsForAllOpt(const UBidiTestCases *pTest, const UChar *srcTxt,
         log_err("Unexpected transform Dest: Test: %s; Digits: 0x%08x; Letters: 0x%08x\ninText: %s; outText: %s; expected: %s\n",
                 pTest->pMessage, digits, letters, pseudoScript(srcTxt), pseudoScript(destTxt), pseudoScript(expected));
     }
+}
+
+static int32_t
+doBiDiTransform(UBiDiTransform *pBiDiTransform,
+    const UChar *src, int32_t srcLength,
+    UChar *dest, int32_t destSize,
+    UBiDiLevel inParaLevel, UBiDiOrder inOrder,
+    UBiDiLevel outParaLevel, UBiDiOrder outOrder,
+    UBiDiMirroring doMirroring, uint32_t shapingOptions,
+    UErrorCode *pErrorCode) {
+
+    int32_t length = ubiditransform_transform(pBiDiTransform,
+        src, srcLength,
+        dest, destSize,
+        inParaLevel, inOrder,
+        outParaLevel, outOrder,
+        doMirroring, shapingOptions, 
+        pErrorCode);
+
+    UChar u16Buf[1000 + sizeof(void *)];
+    u_memset(u16Buf, 0, sizeof(u16Buf) / sizeof(UChar));
+    if (dest)
+        u_strncpy(u16Buf, dest, srcLength);
+
+    UBool blnReturnError = FALSE;
+
+    // utext_openU8
+    {
+        UErrorCode status = U_ZERO_ERROR;
+        UConverter *u8Convertor = ucnv_open("UTF8", &status);
+
+        if ((U_FAILURE(status)) || (u8Convertor == NULL)) {
+            return;
+        }
+
+        char u8BufDst[1000 + sizeof(void *)];
+
+        memset(u8BufDst, 0, sizeof(u8BufDst) / sizeof(char));
+
+        UText* srcUt16 = utext_openUChars(NULL, src, srcLength, &status);
+        UText* dstUt8 = utext_openU8(NULL, u8BufDst, 0, (!dest) ? 0 : sizeof(u8BufDst), &status);
+
+        if ((srcUt16) && (dstUt8) && (!U_FAILURE(status)))
+        {
+            int32_t u8LenDst = ubiditransform_transformUText(pBiDiTransform,
+                srcUt16, dstUt8,
+                inParaLevel, inOrder,
+                outParaLevel, outOrder,
+                doMirroring, shapingOptions,
+                &status);
+
+            int32_t u16Len = u8LenDst;
+            if (dest) {
+                u_memset(u16Buf, 0, sizeof(u16Buf) / sizeof(UChar));
+                u16Len = ucnv_toUChars(u8Convertor, u16Buf, sizeof(u16Buf), (const char *)u8BufDst, u8LenDst * sizeof(char), &status);
+            }
+
+            UBool blnError = TRUE;
+
+            if ((U_FAILURE(*pErrorCode)) && (*pErrorCode == status)) {
+                blnError = FALSE;
+            }
+            if ((status == U_BUFFER_OVERFLOW_ERROR) && ((!dest) || (u16Len == length))) {
+                blnError = FALSE;
+            }
+            if ((status != U_BUFFER_OVERFLOW_ERROR) && (!U_FAILURE(status)) && (u16Len == length) && (memcmp(u16Buf, dest, length) == 0)) {
+                blnError = FALSE;
+            }
+
+            if (blnError) {
+                int32_t pos = 0;
+                if (dest)
+                {
+                    for (pos = 0; pos < length; pos++)
+                    {
+                        if (u16Buf[pos] != dest[pos])
+                            break;
+                    }
+                }
+
+                log_err("failure in u_shapeArabic(utf8)\n");
+                blnReturnError = TRUE;
+            }
+
+            utext_close(srcUt16);
+            utext_close(dstUt8);
+        }
+
+        ucnv_close(u8Convertor);
+    }
+
+    // utext_openU32
+    {
+        UErrorCode status = U_ZERO_ERROR;
+        UConverter *u32Convertor = ucnv_open("UTF32", &status);
+
+        if ((U_FAILURE(status)) || (u32Convertor == NULL)) {
+            return;
+        }
+
+        UChar32 u32BufDst[1000 + sizeof(void *)];
+
+        memset(u32BufDst, 0, sizeof(u32BufDst) / sizeof(UChar32));
+        u32BufDst[0] = 0x0000FEFF;
+
+        UText* srcUt16 = utext_openUChars(NULL, src, srcLength, &status);
+        UText* dstUt32 = utext_openU32(NULL, &u32BufDst[1], 0, (!dest) ? 0 : sizeof(u32BufDst), &status);
+
+        if ((srcUt16) && (dstUt32) && (!U_FAILURE(status)))
+        {
+            int32_t u32LenDst = ubiditransform_transformUText(pBiDiTransform,
+                srcUt16, dstUt32,
+                inParaLevel, inOrder,
+                outParaLevel, outOrder,
+                doMirroring, shapingOptions,
+                &status);
+
+            int32_t u16Len = u32LenDst;
+            if (dest) {
+                u_memset(u16Buf, 0, sizeof(u16Buf) / sizeof(UChar));
+                u16Len = ucnv_toUChars(u32Convertor, u16Buf, sizeof(u16Buf), (const char *)u32BufDst, (u32LenDst + 1) * sizeof(UChar32), &status);
+            }
+
+            UBool blnError = TRUE;
+
+            if ((U_FAILURE(*pErrorCode)) && (*pErrorCode == status)) {
+                blnError = FALSE;
+            }
+            if ((status == U_BUFFER_OVERFLOW_ERROR) && ((!dest) || (u16Len == length))) {
+                blnError = FALSE;
+            }
+            if ((status != U_BUFFER_OVERFLOW_ERROR) && (!U_FAILURE(status)) && (u16Len == length) && (memcmp(u16Buf, dest, length) == 0)) {
+                blnError = FALSE;
+            }
+
+            if (blnError) {
+                log_err("failure in u_shapeArabic(utf32)\n");
+                blnReturnError = TRUE;
+            }
+
+            utext_close(srcUt16);
+            utext_close(dstUt32);
+        }
+
+        ucnv_close(u32Convertor);
+    }
+
+    if (blnReturnError)
+        length = -2;
+
+    return length;
 }
 
 /**
@@ -401,10 +554,13 @@ testAllTransformOptions(void)
     // Test various combinations of base levels, orders, mirroring, digits and letters
     for (i = 0; i < nTestCases; i++) {
         expectedStr = testCases[i].pReorderAndMirror;
-        ubiditransform_transform(pTransform, src, -1, dest, STR_CAPACITY,
+
+        errorCode = U_ZERO_ERROR;
+        doBiDiTransform(pTransform, src, -1, dest, STR_CAPACITY,
                 testCases[i].inLevel, testCases[i].inOr,
                 testCases[i].outLevel, testCases[i].outOr,
                 UBIDI_MIRRORING_ON, 0, &errorCode);
+
         verifyResultsForAllOpt(&testCases[i], src, dest, expectedStr, U_SHAPE_DIGITS_NOOP,
                 U_SHAPE_LETTERS_NOOP);
 
@@ -413,6 +569,7 @@ testAllTransformOptions(void)
                     : testCases[i].pReorderNoMirror;
             for (k = 0; k < nLetters; k++) {
                 /* Use here NULL for pTransform */
+                errorCode = U_ZERO_ERROR;
                 ubiditransform_transform(NULL, src, -1, dest, STR_CAPACITY,
                         testCases[i].inLevel, testCases[i].inOr,
                         testCases[i].outLevel, testCases[i].outOr,

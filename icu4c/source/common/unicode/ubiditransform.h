@@ -13,6 +13,8 @@
 *   created on: 2016jul24
 *   created by: Lina Kemmel
 *
+*   Contributions:
+*   UText enhancements by Paul Werbicki
 */
 
 #ifndef UBIDITRANSFORM_H
@@ -110,6 +112,53 @@ typedef enum {
  * @stable ICU 58
  */
 typedef struct UBiDiTransform UBiDiTransform;
+
+/**
+ * Allocates a <code>UBiDiTransform</code> object. This object can be reused,
+ * e.g. with different ordering schemes, mirroring or shaping options.<p>
+ * <strong>Note:</strong>The object can only be reused in the same thread.
+ * All other threads should allocate a new <code>UBiDiTransform</code> object
+ * before using it.<p>
+ * Example of usage:<p>
+ * <pre>
+ * \code
+ * UErrorCode errorCode = U_ZERO_ERROR;
+ * // Open a new UBiDiTransform.
+ * UBiDiTransform* transform = ubiditransform_open(&errorCode);
+ * // Run a transformation.
+ * ubiditransform_transform(transform,
+ *          text1, -1, text2, -1,
+ *          UBIDI_RTL, UBIDI_LOGICAL,
+ *          UBIDI_LTR, UBIDI_VISUAL,
+ *          UBIDI_MIRRORING_ON,
+ *          U_SHAPE_DIGITS_EN2AN,
+ *          &errorCode);
+ * // Do something with the output text and invoke another transformation using
+ * //   that text as input.
+ * ubiditransform_transform(transform,
+ *          text2, -1, text3, -1,
+ *          UBIDI_LTR, UBIDI_VISUAL,
+ *          UBIDI_RTL, UBIDI_VISUAL,
+ *          UBIDI_MIRRORING_ON,
+ *          0, &errorCode);
+ *\endcode
+ * </pre>
+ * <p>
+ * The <code>UBiDiTransform</code> object must be deallocated by calling
+ * <code>ubiditransform_close()</code>.
+ *
+ * @return An empty <code>UBiDiTransform</code> object.
+ * @stable ICU 58
+ */
+U_STABLE UBiDiTransform* U_EXPORT2
+ubiditransform_open(UErrorCode *pErrorCode);
+
+/**
+ * Deallocates the given <code>UBiDiTransform</code> object.
+ * @stable ICU 58
+ */
+U_STABLE void U_EXPORT2
+ubiditransform_close(UBiDiTransform *pBidiTransform);
 
 /**
  * Performs transformation of text from the bidi layout defined by the input
@@ -254,52 +303,13 @@ ubiditransform_transform(UBiDiTransform *pBiDiTransform,
             UBiDiMirroring doMirroring, uint32_t shapingOptions,
             UErrorCode *pErrorCode);
 
-/**
- * Allocates a <code>UBiDiTransform</code> object. This object can be reused,
- * e.g. with different ordering schemes, mirroring or shaping options.<p>
- * <strong>Note:</strong>The object can only be reused in the same thread.
- * All other threads should allocate a new <code>UBiDiTransform</code> object
- * before using it.<p>
- * Example of usage:<p>
- * <pre>
- * \code
- * UErrorCode errorCode = U_ZERO_ERROR;
- * // Open a new UBiDiTransform.
- * UBiDiTransform* transform = ubiditransform_open(&errorCode);
- * // Run a transformation.
- * ubiditransform_transform(transform,
- *          text1, -1, text2, -1,
- *          UBIDI_RTL, UBIDI_LOGICAL,
- *          UBIDI_LTR, UBIDI_VISUAL,
- *          UBIDI_MIRRORING_ON,
- *          U_SHAPE_DIGITS_EN2AN,
- *          &errorCode);
- * // Do something with the output text and invoke another transformation using
- * //   that text as input.
- * ubiditransform_transform(transform,
- *          text2, -1, text3, -1,
- *          UBIDI_LTR, UBIDI_VISUAL,
- *          UBIDI_RTL, UBIDI_VISUAL,
- *          UBIDI_MIRRORING_ON,
- *          0, &errorCode);
- *\endcode
- * </pre>
- * <p>
- * The <code>UBiDiTransform</code> object must be deallocated by calling
- * <code>ubiditransform_close()</code>.
- *
- * @return An empty <code>UBiDiTransform</code> object.
- * @stable ICU 58
- */
-U_STABLE UBiDiTransform* U_EXPORT2
-ubiditransform_open(UErrorCode *pErrorCode);
-
-/**
- * Deallocates the given <code>UBiDiTransform</code> object.
- * @stable ICU 58
- */
-U_STABLE void U_EXPORT2
-ubiditransform_close(UBiDiTransform *pBidiTransform);
+U_STABLE uint32_t U_EXPORT2
+ubiditransform_transformUText(UBiDiTransform *pBiDiTransform,
+    UText *src, UText *dst,
+    UBiDiLevel inParaLevel, UBiDiOrder inOrder,
+    UBiDiLevel outParaLevel, UBiDiOrder outOrder,
+    UBiDiMirroring doMirroring, uint32_t shapingOptions,
+    UErrorCode *pErrorCode);
 
 #if U_SHOW_CPLUSPLUS_API
 

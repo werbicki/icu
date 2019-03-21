@@ -13,7 +13,9 @@
 *   indentation:4
 *
 *   created:    2005-04-12, Markus W. Scherer
-*   modified:   2018-11-22, Paul Werbicki
+*
+*   Contributions:
+*   UText enhancements by Paul Werbicki
 */
 
 #include "unicode/utypes.h"
@@ -210,7 +212,7 @@ U_CAPI UBool U_EXPORT2
 utext_moveIndex32(UText *ut, int32_t delta)
 {
     UBool result = TRUE;
-    if (ut) {
+    if (utext_isValid(ut)) {
         UChar32 c;
         if (delta > 0) {
             for (; delta > 0; delta--) {
@@ -359,7 +361,7 @@ U_CAPI UChar32 U_EXPORT2
 utext_previous32(UText *ut)
 {
     UChar32 c = U_SENTINEL;
-    if (ut) {
+    if (utext_isValid(ut)) {
         UBool haveAccess = TRUE;
         if (ut->chunkOffset <= 0) {
             haveAccess = utext_access(ut, ut->chunkNativeStart, FALSE);
@@ -402,7 +404,7 @@ U_CAPI UChar32 U_EXPORT2
 utext_next32From(UText *ut, int64_t nativeIndex)
 {
     UChar32 c = U_SENTINEL;
-    if (ut) {
+    if (utext_isValid(ut)) {
         UBool haveAccess = TRUE;
         if ((nativeIndex < ut->chunkNativeStart) || (nativeIndex >= ut->chunkNativeLimit)) {
             // Desired nativeIndex is outside of the current chunk.
@@ -514,8 +516,10 @@ utext_extract(UText *ut,
     UErrorCode *status)
 {
     int32_t length = 0;
-    if ((ut) && (ut->pFuncs->extract))
+    if ((utext_isValid(ut)) && (ut->pFuncs->extract))
         length = ut->pFuncs->extract(ut, start, limit, dest, destCapacity, status);
+    else
+        *status = U_ILLEGAL_ARGUMENT_ERROR;
     return length;
 }
 
@@ -523,7 +527,7 @@ U_CAPI UBool U_EXPORT2
 utext_isWritable(const UText *ut)
 {
     UBool result = FALSE;
-    if (ut)
+    if (utext_isValid(ut))
         result = (ut->providerProperties & I32_FLAG(UTEXT_PROVIDER_WRITABLE)) != 0;
     return result;
 }
@@ -531,14 +535,14 @@ utext_isWritable(const UText *ut)
 U_CAPI void U_EXPORT2
 utext_freeze(UText *ut) {
     // Zero out the WRITABLE flag.
-    if (ut)
+    if (utext_isValid(ut))
         ut->providerProperties &= ~(I32_FLAG(UTEXT_PROVIDER_WRITABLE));
 }
 
 U_CAPI UBool U_EXPORT2
 utext_hasMetaData(const UText *ut) {
     UBool result = FALSE;
-    if (ut)
+    if (utext_isValid(ut))
         result = (ut->providerProperties & I32_FLAG(UTEXT_PROVIDER_HAS_META_DATA)) != 0;
     return result;
 }
@@ -549,7 +553,7 @@ utext_replace(UText *ut,
     const UChar *replacementText, int32_t replacementLength,
     UErrorCode *status)
 {
-    if (U_FAILURE(*status)) {
+    if ((status == NULL) || (U_FAILURE(*status))) {
         return 0;
     }
     if ((ut->providerProperties & I32_FLAG(UTEXT_PROVIDER_WRITABLE)) == 0) {
@@ -557,8 +561,12 @@ utext_replace(UText *ut,
         return 0;
     }
     int32_t length = 0;
-    if ((ut) && (ut->pFuncs->replace))
+    if ((utext_isValid(ut)) && (ut->pFuncs->replace))
         length = ut->pFuncs->replace(ut, nativeStart, nativeLimit, replacementText, replacementLength, status);
+    else if (!utext_isValid(ut))
+        *status = U_ILLEGAL_ARGUMENT_ERROR;
+    else
+        *status = U_UNSUPPORTED_ERROR;
     return length;
 }
 
@@ -569,15 +577,65 @@ utext_copy(UText *ut,
     UBool move,
     UErrorCode *status)
 {
-    if (U_FAILURE(*status)) {
+    if ((status == NULL) || (U_FAILURE(*status))) {
         return;
     }
     if ((ut->providerProperties & I32_FLAG(UTEXT_PROVIDER_WRITABLE)) == 0) {
         *status = U_NO_WRITE_PERMISSION;
         return;
     }
-    if ((ut) && (ut->pFuncs->copy))
+    if ((utext_isValid(ut)) && (ut->pFuncs->copy))
         ut->pFuncs->copy(ut, nativeStart, nativeLimit, destIndex, move, status);
+    else if (!utext_isValid(ut))
+        *status = U_ILLEGAL_ARGUMENT_ERROR;
+    else
+        *status = U_UNSUPPORTED_ERROR;
+}
+
+U_CAPI void U_EXPORT2
+utext_truncate(UText *ut,
+    UErrorCode *status)
+{
+    if ((status == NULL) || (U_FAILURE(*status))) {
+        return;
+    }
+    if ((ut->providerProperties & I32_FLAG(UTEXT_PROVIDER_WRITABLE)) == 0) {
+        *status = U_NO_WRITE_PERMISSION;
+        return;
+    }
+    if ((utext_isValid(ut)) && (ut->pFuncs->truncate))
+        ut->pFuncs->truncate(ut, status);
+    else if (!utext_isValid(ut))
+        *status = U_ILLEGAL_ARGUMENT_ERROR;
+    else
+        *status = U_UNSUPPORTED_ERROR;
+}
+
+U_CAPI int64_t U_EXPORT2
+utext_copyUText(UText *dst, 
+    UText *src,
+    UErrorCode *status)
+{
+    if ((status == NULL) || (U_FAILURE(*status))) {
+        return 0;
+    }
+    if ((utext_isValid(src)) && (utext_isValid(dst)))
+    {
+        int64_t srcNativeIndex = UTEXT_GETNATIVEINDEX(src);
+        int64_t srcNativeLimit = 0;
+        int64_t dstNativeLimit = utext_nativeLength(dst);
+
+        for (; (utext_access(src, srcNativeLimit, TRUE)) && (src->chunkLength > 0); )
+        {
+            dstNativeLimit += utext_replace(dst, dstNativeLimit, dstNativeLimit, src->chunkContents, src->chunkLength, status);
+            srcNativeLimit += src->chunkNativeLimit;
+        }
+
+        UTEXT_SETNATIVEINDEX(src, srcNativeIndex);
+
+        return dstNativeLimit;
+    }
+    return 0;
 }
 
 U_CAPI UBool U_EXPORT2
@@ -608,11 +666,11 @@ utext_equals(const UText *a, const UText *b)
 U_CAPI UText * U_EXPORT2
 utext_clone(UText *dest, const UText *src, UBool deep, UBool readOnly, UErrorCode *status)
 {
-    if (U_FAILURE(*status)) {
+    if ((status == NULL) || (U_FAILURE(*status))) {
         return dest;
     }
     UText *result = 0;
-    if ((src) && (src->pFuncs->clone))
+    if ((utext_isValid(src)) && (src->pFuncs->clone))
         result = src->pFuncs->clone(dest, src, deep, status);
     else
         *status = U_ILLEGAL_ARGUMENT_ERROR;
@@ -676,7 +734,7 @@ static const UText emptyText = UTEXT_INITIALIZER;
 U_CAPI UText * U_EXPORT2
 utext_setup(UText *ut, int32_t extraSpace, UErrorCode *status)
 {
-    if (U_FAILURE(*status)) {
+    if ((status == NULL) || (U_FAILURE(*status))) {
         return ut;
     }
     if (ut == NULL) {
@@ -1028,7 +1086,7 @@ u16TextClone(UText *dest, const UText *src,
             length64++;
         }
 
-        UChar* copyStr = (UChar*)uprv_malloc(length64 * sizeof(UChar));
+        UChar* copyStr = (UChar*)uprv_malloc((size_t)(length64 * sizeof(UChar)));
         if (copyStr == NULL) {
             *pErrorCode = U_MEMORY_ALLOCATION_ERROR;
         }
@@ -1450,6 +1508,20 @@ u16TextCopy(UText *ut,
 }
 
 static void U_CALLCONV
+u16TextTruncate(UText *ut,
+    UErrorCode* pErrorCode)
+{
+    if (U_FAILURE(*pErrorCode)) {
+        return;
+    }
+
+    ut->a = 0;
+
+    utext_invalidateAccess(ut);
+    u16TextAccess(ut, 0, TRUE);
+}
+
+static void U_CALLCONV
 u16TextClose(UText *ut)
 {
     // Most of the work of close is done by the generic UText framework close.
@@ -1476,9 +1548,9 @@ static const struct UTextFuncs u16Funcs =
     NULL,              // MapOffsetToNative,
     NULL,              // MapIndexToUTF16,
     u16TextClose,
-    NULL,              // spare 1
-    NULL,              // spare 2
-    NULL,              // spare 3
+    u16TextTruncate,
+    NULL,              // spare
+    NULL,              // spare
 };
 
 U_CDECL_END
@@ -1639,7 +1711,7 @@ u8TextClone(UText *dest, const UText *src,
             length64++;
         }
 
-        uint8_t* copyStr = (uint8_t*)uprv_malloc(length64 * sizeof(uint8_t));
+        uint8_t* copyStr = (uint8_t*)uprv_malloc((size_t)(length64 * sizeof(uint8_t)));
         if (copyStr == NULL) {
             *pErrorCode = U_MEMORY_ALLOCATION_ERROR;
         }
@@ -2125,23 +2197,25 @@ u8TextReplace(UText *ut,
     // to make the replacement; second, do it in a single pass. Depending on
     // the direction we can tackle the replacement and meet these two goals
     // at the same time.
+
+    int64_t si;
+    int32_t di;
+    UChar32 uchar;
+    int8_t length8;
+
     if (nativeLimit64 - nativeStart64 < nativeReplLength64) {
-        int64_t si;
-        int32_t di;
-        UChar32 uchar;
         for (si = length64 + diff64 - 1; (si >= nativeStart64 + nativeReplLength64); si--)
             s[si] = s[si - diff64];
-        for (di = replacementLength; (di > 0) && (si >= nativeStart64); ) {
+        for (di = replacementLength; (di > 0) && (si >= nativeStart64); si--) {
             U16_PREV(replacementText, 0, di, uchar);
-            if (U8_IS_SINGLE(uchar)) {
-                s[si--] = (uint8_t)uchar;
-            }
-            else {
+            length8 = U8_LENGTH(uchar);
+            if (length8 > 1) {
                 // Convert to 32-bit for utf8_appendCharSafeBody() and then back
                 // to 64-bit to maintain single code stream.
                 UBool isError = FALSE;
+                si -= (length8 - 1);
                 int32_t limit32 = (int32_t)(ut->a + diff64 - si < si + U8_TEXT_CHUNK_SIZE ? ut->a + diff64 - si : U8_TEXT_CHUNK_SIZE);
-                si += utf8_appendCharSafeBody(&s[si], 0, limit32, uchar, &isError);
+                utf8_appendCharSafeBody(&s[si], 0, limit32, uchar, &isError);
 
                 // Alternate approach that uses macros, does not account for issues with
                 // malformed sequences.
@@ -2151,28 +2225,30 @@ u8TextReplace(UText *ut,
                 //U8_APPEND_UNSAFE(s, i, uchar);
                 //i -= j;
             }
+            else {
+                s[si] = (uint8_t)uchar;
+            }
         }
     }
     else {
-        int64_t si;
-        int32_t di;
-        UChar32 uchar;
-        for (si = (int64_t)nativeStart64, di = 0; (di < replacementLength) && (si < nativeStart64 + nativeReplLength64); ) {
+        for (si = (int64_t)nativeStart64, di = 0; (di < replacementLength) && (si < nativeStart64 + nativeReplLength64); si++) {
             U16_NEXT(replacementText, di, ut->a, uchar);
-            if (U8_IS_SINGLE(uchar)) {
-                s[si++] = (uint8_t)uchar;
-            }
-            else {
+            length8 = U8_LENGTH(uchar);
+            if (length8 > 1) {
                 // Convert to 32-bit for utf8_appendCharSafeBody() and then back
                 // to 64-bit to maintain single code stream.
                 UBool isError = FALSE;
                 int32_t limit32 = utext_pinIndex32((int32_t)(si + U8_TEXT_CHUNK_SIZE > ut->a - si ? ut->a - si : U8_TEXT_CHUNK_SIZE), nativeLimit64);
-                si += utf8_appendCharSafeBody(&s[si], 0, limit32, uchar, &isError);
+                utf8_appendCharSafeBody(&s[si], 0, limit32, uchar, &isError);
+                si += (length8 - 1);
 
                 // Alternate approach that uses macros, does not account for issues with
                 // malformed sequences.
                 //
                 //U8_APPEND_UNSAFE(s, i, uchar);
+            }
+            else {
+                s[si] = (uint8_t)uchar;
             }
         }
         for (; (si < length64); si++)
@@ -2283,6 +2359,21 @@ u8TextCopy(UText *ut,
     u8TextAccess(ut, nativeIndex64, TRUE);
 }
 
+static void U_CALLCONV
+u8TextTruncate(UText *ut,
+    UErrorCode* pErrorCode)
+{
+    if (U_FAILURE(*pErrorCode)) {
+        return;
+    }
+
+    ut->a = 0;
+
+    utext_invalidateAccess(ut);
+    u8InvalidateBuffers(ut);
+    u8TextAccess(ut, 0, TRUE);
+}
+
 static int64_t U_CALLCONV
 u8TextMapOffsetToNative(const UText *ut)
 {
@@ -2327,9 +2418,9 @@ static const struct UTextFuncs u8Funcs =
     u8TextMapOffsetToNative,
     u8TextMapIndexToUTF16,
     u8TextClose,
-    NULL,              // spare 1
-    NULL,              // spare 2
-    NULL,              // spare 3
+    u8TextTruncate,
+    NULL,              // spare
+    NULL,              // spare
 };
 
 U_CDECL_END
@@ -2490,7 +2581,7 @@ u32TextClone(UText *dest, const UText *src,
             length64++;
         }
 
-        UChar32* copyStr = (UChar32*)uprv_malloc(length64 * sizeof(UChar32));
+        UChar32* copyStr = (UChar32*)uprv_malloc((size_t)(length64 * sizeof(UChar32)));
         if (copyStr == NULL) {
             *pErrorCode = U_MEMORY_ALLOCATION_ERROR;
         }
@@ -2991,6 +3082,21 @@ u32TextCopy(UText *ut,
     u32TextAccess(ut, nativeIndex64, TRUE);
 }
 
+static void U_CALLCONV
+u32TextTruncate(UText *ut,
+    UErrorCode* pErrorCode)
+{
+    if (U_FAILURE(*pErrorCode)) {
+        return;
+    }
+
+    ut->a = 0;
+
+    utext_invalidateAccess(ut);
+    u32InvalidateBuffers(ut);
+    u32TextAccess(ut, 0, TRUE);
+}
+
 static int64_t U_CALLCONV
 u32TextMapOffsetToNative(const UText *ut)
 {
@@ -3035,9 +3141,9 @@ static const struct UTextFuncs u32Funcs =
     u32TextMapOffsetToNative,
     u32TextMapIndexToUTF16,
     u32TextClose,
-    NULL,              // spare 1
-    NULL,              // spare 2
-    NULL,              // spare 3
+    u32TextTruncate,
+    NULL,
+    NULL,
 };
 
 U_CDECL_END

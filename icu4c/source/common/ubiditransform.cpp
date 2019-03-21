@@ -13,6 +13,8 @@
 *   created on: 2016jul24
 *   created by: Lina Kemmel
 *
+*   Contributions:
+*   UText enhancements by Paul Werbicki
 */
 
 #include "cmemory.h"
@@ -78,12 +80,9 @@ typedef struct {
 struct UBiDiTransform {
     UBiDi                   *pBidi;             /* pointer to a UBiDi object */
     const ReorderingScheme  *pActiveScheme;     /* effective reordering scheme */
-    UChar                   *src;               /* input text */
-    UChar                   *dest;              /* output text */
-    uint32_t                srcLength;          /* input text length - not really needed as we are zero-terminated and can u_strlen */
-    uint32_t                srcSize;            /* input text capacity excluding the trailing zero */
-    uint32_t                destSize;           /* output text capacity */
-    uint32_t                *pDestLength;       /* number of UChars written to dest */
+    UText                   *dstUt;             /* output text */
+    int32_t                 *pDestLength;       /* number of UChars written to dest */
+    UText                   *bidiUt;            /* text used by UBiDi */
     uint32_t                reorderingOptions;  /* reordering options - currently only suppot DO_MIRRORING */
     uint32_t                digits;             /* digit option for ArabicShaping */
     uint32_t                letters;            /* letter option for ArabicShaping */
@@ -93,12 +92,14 @@ U_DRAFT UBiDiTransform* U_EXPORT2
 ubiditransform_open(UErrorCode *pErrorCode)
 {
     UBiDiTransform *pBiDiTransform = NULL;
+
     if (U_SUCCESS(*pErrorCode)) {
         pBiDiTransform = (UBiDiTransform*) uprv_calloc(1, sizeof(UBiDiTransform));
         if (pBiDiTransform == NULL) {
             *pErrorCode = U_MEMORY_ALLOCATION_ERROR;
         }
     }
+
     return pBiDiTransform;
 }
 
@@ -109,8 +110,8 @@ ubiditransform_close(UBiDiTransform *pBiDiTransform)
         if (pBiDiTransform->pBidi != NULL) {
             ubidi_close(pBiDiTransform->pBidi);
         }
-        if (pBiDiTransform->src != NULL) {
-            uprv_free(pBiDiTransform->src);
+        if (pBiDiTransform->bidiUt != NULL) {
+            utext_close(pBiDiTransform->bidiUt);
         }
         uprv_free(pBiDiTransform);
     }
@@ -128,8 +129,10 @@ ubiditransform_close(UBiDiTransform *pBiDiTransform)
 static UBool
 action_resolve(UBiDiTransform *pTransform, UErrorCode *pErrorCode)
 {
-    ubidi_setPara(pTransform->pBidi, pTransform->src, pTransform->srcLength,
-            pTransform->pActiveScheme->baseLevel, NULL, pErrorCode);
+    pTransform->bidiUt = utext_clone(pTransform->bidiUt, pTransform->dstUt, TRUE, TRUE, pErrorCode);
+    if (!U_FAILURE(*pErrorCode))
+        ubidi_setUPara(pTransform->pBidi, pTransform->bidiUt, pTransform->pActiveScheme->baseLevel, NULL, pErrorCode);
+
     return FALSE;
 }
 
@@ -145,11 +148,14 @@ action_resolve(UBiDiTransform *pTransform, UErrorCode *pErrorCode)
 static UBool
 action_reorder(UBiDiTransform *pTransform, UErrorCode *pErrorCode)
 {
-    ubidi_writeReordered(pTransform->pBidi, pTransform->dest, pTransform->destSize,
-            static_cast<uint16_t>(pTransform->reorderingOptions), pErrorCode);
+    utext_truncate(pTransform->dstUt, pErrorCode);
 
-    *pTransform->pDestLength = pTransform->srcLength;
+    *pTransform->pDestLength = ubidi_writeUReordered(pTransform->pBidi,
+        pTransform->dstUt,
+        static_cast<uint16_t>(pTransform->reorderingOptions), 
+        pErrorCode);
     pTransform->reorderingOptions = UBIDI_REORDER_DEFAULT;
+
     return TRUE;
 }
 
@@ -166,8 +172,10 @@ static UBool
 action_setInverse(UBiDiTransform *pTransform, UErrorCode *pErrorCode)
 {
     (void)pErrorCode;
+
     ubidi_setInverse(pTransform->pBidi, TRUE);
     ubidi_setReorderingMode(pTransform->pBidi, UBIDI_REORDER_INVERSE_LIKE_DIRECT);
+
     return FALSE;
 }
 
@@ -185,7 +193,9 @@ static UBool
 action_setRunsOnly(UBiDiTransform *pTransform, UErrorCode *pErrorCode)
 {
     (void)pErrorCode;
+
     ubidi_setReorderingMode(pTransform->pBidi, UBIDI_REORDER_RUNS_ONLY);
+
     return FALSE;
 }
 
@@ -201,49 +211,20 @@ action_setRunsOnly(UBiDiTransform *pTransform, UErrorCode *pErrorCode)
 static UBool
 action_reverse(UBiDiTransform *pTransform, UErrorCode *pErrorCode)
 {
-    ubidi_writeReverse(pTransform->src, pTransform->srcLength,
-            pTransform->dest, pTransform->destSize,
-            UBIDI_REORDER_DEFAULT, pErrorCode);
-    *pTransform->pDestLength = pTransform->srcLength;
-    return TRUE;
-}
+    UText srcUt = UTEXT_INITIALIZER;
+    utext_clone(&srcUt, pTransform->dstUt, TRUE, TRUE, pErrorCode);
+    if (!U_FAILURE(*pErrorCode))
+    {
+        utext_truncate(pTransform->dstUt, pErrorCode);
 
-/**
- * Applies a new value to the text that serves as input at the current
- * processing step. This value is identical to the original one when we begin
- * the processing, but usually changes as the transformation progresses.
- * 
- * @param pTransform A pointer to the <code>UBiDiTransform</code> structure.
- * @param newSrc A pointer whose value is to be used as input text.
- * @param newLength A length of the new text in <code>UChar</code>s.
- * @param newSize A new source capacity in <code>UChar</code>s.
- * @param pErrorCode Pointer to the error code value.
- */
-static void
-updateSrc(UBiDiTransform *pTransform, const UChar *newSrc, uint32_t newLength,
-        uint32_t newSize, UErrorCode *pErrorCode)
-{
-    if (newSize < newLength) {
-        *pErrorCode = U_BUFFER_OVERFLOW_ERROR;
-        return;
+        *pTransform->pDestLength = ubidi_writeUReverse(&srcUt, pTransform->dstUt, UBIDI_REORDER_DEFAULT, pErrorCode);
+
+        utext_close(&srcUt);
+
+        return TRUE;
     }
-    if (newSize > pTransform->srcSize) {
-        newSize += 50; // allocate slightly more than needed right now
-        if (pTransform->src != NULL) {
-            uprv_free(pTransform->src);
-            pTransform->src = NULL;
-        }
-        pTransform->src = (UChar *)uprv_malloc(newSize * sizeof(UChar));
-        if (pTransform->src == NULL) {
-            *pErrorCode = U_MEMORY_ALLOCATION_ERROR;
-            //pTransform->srcLength = pTransform->srcSize = 0;
-            return;
-        }
-        pTransform->srcSize = newSize;
-    }
-    u_strncpy(pTransform->src, newSrc, newLength);
-    pTransform->srcLength = u_terminateUChars(pTransform->src,
-    		pTransform->srcSize, newLength, pErrorCode);
+
+    return FALSE;
 }
 
 /**
@@ -253,12 +234,23 @@ updateSrc(UBiDiTransform *pTransform, const UChar *newSrc, uint32_t newLength,
  * @param options Shaping options.
  * @param pErrorCode Pointer to the error code value.
  */
-static void
+static UBool
 doShape(UBiDiTransform *pTransform, uint32_t options, UErrorCode *pErrorCode)
 {
-    *pTransform->pDestLength = u_shapeArabic(pTransform->src,
-            pTransform->srcLength, pTransform->dest, pTransform->destSize,
-            options, pErrorCode);
+    UText srcUt = UTEXT_INITIALIZER;
+    utext_clone(&srcUt, pTransform->dstUt, TRUE, TRUE, pErrorCode);
+    if (!U_FAILURE(*pErrorCode))
+    {
+        utext_truncate(pTransform->dstUt, pErrorCode);
+
+        *pTransform->pDestLength = u_shapeUText(&srcUt, pTransform->dstUt, options, pErrorCode);
+
+        utext_close(&srcUt);
+
+        return TRUE;
+    }
+
+    return FALSE;
 }
 
 /**
@@ -276,18 +268,17 @@ action_shapeArabic(UBiDiTransform *pTransform, UErrorCode *pErrorCode)
     if ((pTransform->letters | pTransform->digits) == 0) {
         return FALSE;
     }
+
     if (pTransform->pActiveScheme->lettersDir == pTransform->pActiveScheme->digitsDir) {
-        doShape(pTransform, pTransform->letters | pTransform->digits | pTransform->pActiveScheme->lettersDir,
-                pErrorCode);
+        doShape(pTransform, pTransform->letters | pTransform->digits | pTransform->pActiveScheme->lettersDir, pErrorCode);
     } else {
         doShape(pTransform, pTransform->digits | pTransform->pActiveScheme->digitsDir, pErrorCode);
+
         if (U_SUCCESS(*pErrorCode)) {
-            updateSrc(pTransform, pTransform->dest, *pTransform->pDestLength,
-                    *pTransform->pDestLength, pErrorCode);
-            doShape(pTransform, pTransform->letters | pTransform->pActiveScheme->lettersDir,
-                    pErrorCode);
+            doShape(pTransform, pTransform->letters | pTransform->pActiveScheme->lettersDir, pErrorCode);
         }
     }
+
     return TRUE;
 }
 
@@ -303,23 +294,39 @@ action_shapeArabic(UBiDiTransform *pTransform, UErrorCode *pErrorCode)
 static UBool
 action_mirror(UBiDiTransform *pTransform, UErrorCode *pErrorCode)
 {
-    UChar32 c;
-    uint32_t i = 0, j = 0;
     if (0 == (pTransform->reorderingOptions & UBIDI_DO_MIRRORING)) {
         return FALSE;
     }
-    if (pTransform->destSize < pTransform->srcLength) {
-        *pErrorCode = U_BUFFER_OVERFLOW_ERROR;
-        return FALSE;
+
+    utext_setNativeIndex(pTransform->dstUt, 0);
+    int32_t nativeStart = 0;
+    UChar32 uchar = UTEXT_NEXT32(pTransform->dstUt);
+    int32_t nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(pTransform->dstUt);
+    for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL);
+        nativeStart = nativeLimit, uchar = UTEXT_NEXT32(pTransform->dstUt), nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(pTransform->dstUt))
+    {
+        UBool isOdd = ubidi_getLevelAt(pTransform->pBidi, nativeStart) & 1;
+        if (isOdd)
+        {
+            uchar = u_charMirror(uchar);
+
+            UChar uchars[2] = { (UChar)uchar, 0 };
+            int32_t length = 1;
+
+            if ((!U16_IS_SINGLE(uchar)) || (U_IS_SUPPLEMENTARY(uchar)))
+            {
+                uchars[0] = U16_LEAD(uchar);
+                uchars[1] = U16_TRAIL(uchar);
+                length = 2;
+            };
+
+            utext_replace(pTransform->dstUt, nativeStart, nativeLimit, uchars, length, pErrorCode);
+        }
     }
-    do {
-        UBool isOdd = ubidi_getLevelAt(pTransform->pBidi, i) & 1;
-        U16_NEXT(pTransform->src, i, pTransform->srcLength, c); 
-        U16_APPEND_UNSAFE(pTransform->dest, j, isOdd ? u_charMirror(c) : c);
-    } while (i < pTransform->srcLength);
     
-    *pTransform->pDestLength = pTransform->srcLength;
+    *pTransform->pDestLength = nativeLimit;
     pTransform->reorderingOptions = UBIDI_REORDER_DEFAULT;
+
     return TRUE;
 }
 
@@ -387,13 +394,12 @@ static const uint32_t nSchemes = sizeof(Schemes) / sizeof(*Schemes);
  * of the first strong bidi character.
  */
 static void
-resolveBaseDirection(const UChar *text, uint32_t length,
-        UBiDiLevel *pInLevel, UBiDiLevel *pOutLevel)
+resolveBaseDirection(UText *ut, UBiDiLevel *pInLevel, UBiDiLevel *pOutLevel)
 {
     switch (*pInLevel) {
         case UBIDI_DEFAULT_LTR:
         case UBIDI_DEFAULT_RTL: {
-            UBiDiLevel level = static_cast<UBiDiLevel>(ubidi_getBaseDirection(text, length));
+            UBiDiLevel level = static_cast<UBiDiLevel>(ubidi_getUBaseDirection(ut));
             *pInLevel = static_cast<UBiDiLevel>(level != UBIDI_NEUTRAL) ? level
                     : *pInLevel == UBIDI_DEFAULT_RTL ? static_cast<UBiDiLevel>(RTL) : static_cast<UBiDiLevel>(LTR);
             break;
@@ -435,28 +441,38 @@ findMatchingScheme(UBiDiLevel inLevel, UBiDiLevel outLevel,
 }
 
 U_DRAFT uint32_t U_EXPORT2
-ubiditransform_transform(UBiDiTransform *pBiDiTransform,
-            const UChar *src, int32_t srcLength,
-            UChar *dest, int32_t destSize,
+ubiditransform_transformUText(UBiDiTransform *pBiDiTransform,
+            UText *srcUt, UText *dstUt,
             UBiDiLevel inParaLevel, UBiDiOrder inOrder,
             UBiDiLevel outParaLevel, UBiDiOrder outOrder,
             UBiDiMirroring doMirroring, uint32_t shapingOptions,
-            UErrorCode *pErrorCode)
-{
-    uint32_t destLength = 0;
-    UBool textChanged = FALSE;
-    const UBiDiTransform *pOrigTransform = pBiDiTransform;
-    const UBiDiAction *action = NULL;
+            UErrorCode *pErrorCode) {
 
-    if (U_FAILURE(*pErrorCode)) {
+    if ((pErrorCode == NULL) || (U_FAILURE(*pErrorCode))) {
         return 0;
     }
-    if (src == NULL || dest == NULL) {
+
+    if (srcUt == NULL || dstUt == NULL) {
         *pErrorCode = U_ILLEGAL_ARGUMENT_ERROR;
         return 0;
     }
-    CHECK_LEN(src, srcLength, pErrorCode);
-    CHECK_LEN(dest, destSize, pErrorCode);
+
+    if (!utext_isWritable(dstUt)) {
+        *pErrorCode = U_NO_WRITE_PERMISSION;
+        return 0;
+    }
+
+    // Do input and output overlap?
+    if (utext_equals(srcUt, dstUt)) {
+        *pErrorCode = U_ILLEGAL_ARGUMENT_ERROR;
+        return 0;
+    }
+
+    const UBiDiTransform *pOrigTransform = pBiDiTransform;
+    const UBiDiAction *action = NULL;
+    int32_t srcNativeLength = (int32_t)utext_nativeLength(srcUt);
+    int32_t dstNativeLength = 0;
+    UBool textChanged = FALSE;
 
     if (pBiDiTransform == NULL) {
         pBiDiTransform = ubiditransform_open(pErrorCode);
@@ -464,67 +480,110 @@ ubiditransform_transform(UBiDiTransform *pBiDiTransform,
             return 0;
         }
     }
-    /* Current limitation: in multiple paragraphs will be resolved according
-       to the 1st paragraph */
-    resolveBaseDirection(src, srcLength, &inParaLevel, &outParaLevel);
 
-    pBiDiTransform->pActiveScheme = findMatchingScheme(inParaLevel, outParaLevel,
+    dstNativeLength = (int32_t)utext_copyUText(dstUt, srcUt, pErrorCode);
+    if (!U_FAILURE(*pErrorCode))
+    {
+        // Current limitation: in multiple paragraphs will be resolved according
+        // to the 1st paragraph.
+        resolveBaseDirection(dstUt, &inParaLevel, &outParaLevel);
+
+        pBiDiTransform->pActiveScheme = findMatchingScheme(inParaLevel, outParaLevel,
             inOrder, outOrder);
-    if (pBiDiTransform->pActiveScheme == NULL) {
-        goto cleanup;
-    }
-    pBiDiTransform->reorderingOptions = doMirroring ? UBIDI_DO_MIRRORING
-            : UBIDI_REORDER_DEFAULT;
+        if (pBiDiTransform->pActiveScheme != NULL) {
+            pBiDiTransform->reorderingOptions = doMirroring ? UBIDI_DO_MIRRORING
+                : UBIDI_REORDER_DEFAULT;
 
-    /* Ignore TEXT_DIRECTION_* flags, as we apply our own depending on the text
-       scheme at the time shaping is invoked. */
-    shapingOptions &= ~U_SHAPE_TEXT_DIRECTION_MASK;
-    pBiDiTransform->digits = shapingOptions & ~U_SHAPE_LETTERS_MASK;
-    pBiDiTransform->letters = shapingOptions & ~U_SHAPE_DIGITS_MASK;
+            /* Ignore TEXT_DIRECTION_* flags, as we apply our own depending on the text
+               scheme at the time shaping is invoked. */
+            shapingOptions &= ~U_SHAPE_TEXT_DIRECTION_MASK;
+            pBiDiTransform->digits = shapingOptions & ~U_SHAPE_LETTERS_MASK;
+            pBiDiTransform->letters = shapingOptions & ~U_SHAPE_DIGITS_MASK;
 
-    updateSrc(pBiDiTransform, src, srcLength, destSize > srcLength ? destSize : srcLength, pErrorCode);
-    if (U_FAILURE(*pErrorCode)) {
-        goto cleanup;
-    }
-    if (pBiDiTransform->pBidi == NULL) {
-        pBiDiTransform->pBidi = ubidi_openSized(0, 0, pErrorCode);
-        if (U_FAILURE(*pErrorCode)) {
-            goto cleanup;
-        }
-    }
-    pBiDiTransform->dest = dest;
-    pBiDiTransform->destSize = destSize;
-    pBiDiTransform->pDestLength = &destLength;
+            if (pBiDiTransform->pBidi == NULL)
+                pBiDiTransform->pBidi = ubidi_openSized(0, 0, pErrorCode);
 
-    /* Checking for U_SUCCESS() within the loop to bail out on first failure. */
-    for (action = pBiDiTransform->pActiveScheme->actions; *action && U_SUCCESS(*pErrorCode); action++) {
-        if ((*action)(pBiDiTransform, pErrorCode)) {
-            if (action + 1) {
-                updateSrc(pBiDiTransform, pBiDiTransform->dest, *pBiDiTransform->pDestLength,
-                        *pBiDiTransform->pDestLength, pErrorCode);
+            if (!U_FAILURE(*pErrorCode)) {
+                pBiDiTransform->dstUt = dstUt;
+                pBiDiTransform->pDestLength = &dstNativeLength;
+
+                // Check for U_SUCCESS() within the loop to bail out on first failure.
+                for (action = pBiDiTransform->pActiveScheme->actions; (*action) && (U_SUCCESS(*pErrorCode)); action++) {
+                    if ((*action)(pBiDiTransform, pErrorCode)) {
+                        textChanged = TRUE;
+                    }
+                }
+
+                ubidi_setInverse(pBiDiTransform->pBidi, FALSE);
+
+                if ((!textChanged) && (U_SUCCESS(*pErrorCode))) {
+                    dstNativeLength = srcNativeLength;
+                }
             }
-            textChanged = TRUE;
         }
-    }
-    ubidi_setInverse(pBiDiTransform->pBidi, FALSE);
 
-    if (!textChanged && U_SUCCESS(*pErrorCode)) {
-        /* Text was not changed - just copy src to dest */
-        if (destSize < srcLength) {
-            *pErrorCode = U_BUFFER_OVERFLOW_ERROR;
-        } else {
-            u_strncpy(dest, src, srcLength);
-            destLength = srcLength;
+        if (pOrigTransform != pBiDiTransform) {
+            ubiditransform_close(pBiDiTransform);
+        }
+        else {
+            pBiDiTransform->dstUt = NULL;
+            pBiDiTransform->pDestLength = NULL;
         }
     }
-cleanup:
-    if (pOrigTransform != pBiDiTransform) {
-        ubiditransform_close(pBiDiTransform);
-    } else {
-        pBiDiTransform->dest = NULL;
-        pBiDiTransform->pDestLength = NULL;
-        pBiDiTransform->srcLength = 0;
-        pBiDiTransform->destSize = 0;
+
+    return U_FAILURE(*pErrorCode) ? 0 : dstNativeLength;
+}
+
+U_DRAFT uint32_t U_EXPORT2
+ubiditransform_transform(UBiDiTransform *pBiDiTransform,
+    const UChar *src, int32_t srcLength,
+    UChar *dest, int32_t destSize,
+    UBiDiLevel inParaLevel, UBiDiOrder inOrder,
+    UBiDiLevel outParaLevel, UBiDiOrder outOrder,
+    UBiDiMirroring doMirroring, uint32_t shapingOptions,
+    UErrorCode *pErrorCode) {
+
+    if ((pErrorCode == NULL) || (U_FAILURE(*pErrorCode))) {
+        return 0;
     }
-    return U_FAILURE(*pErrorCode) ? 0 : destLength;
+
+    if ((src == NULL) || (srcLength < -1)
+        || (destSize < 0) || ((destSize > 0) && (dest == NULL))
+        ) {
+        *pErrorCode = U_ILLEGAL_ARGUMENT_ERROR;
+        return 0;
+    }
+
+    // Do input and output overlap?
+    if ((dest != NULL) && ((src >= dest && src < dest + destSize)
+        || (dest >= src && dest < src + srcLength))) {
+        *pErrorCode = U_ILLEGAL_ARGUMENT_ERROR;
+        return 0;
+    }
+
+    CHECK_LEN(src, srcLength, pErrorCode);
+    CHECK_LEN(dest, destSize, pErrorCode);
+
+    UText srcUt = UTEXT_INITIALIZER;
+    utext_openUChars(&srcUt, src, srcLength, pErrorCode);
+    if (U_FAILURE(*pErrorCode))
+        return 0;
+
+    UText dstUt = UTEXT_INITIALIZER;
+    utext_openU16(&dstUt, dest, 0, destSize, pErrorCode);
+    if (U_FAILURE(*pErrorCode))
+        return 0;
+
+    // A stack allocated UText wrapping a UChar * string
+    // can be dumped without explicitly closing it.
+    int32_t length = ubiditransform_transformUText(pBiDiTransform, &srcUt, &dstUt,
+        inParaLevel, inOrder,
+        outParaLevel, outOrder,
+        doMirroring, shapingOptions,
+        pErrorCode);
+
+    utext_close(&srcUt);
+    utext_close(&dstUt);
+
+    return length;
 }

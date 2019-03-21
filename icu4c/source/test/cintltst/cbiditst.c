@@ -20,6 +20,7 @@
 #include "unicode/ustring.h"
 #include "unicode/ubidi.h"
 #include "unicode/ushape.h"
+#include "unicode/ucnv.h"
 #include "cbiditst.h"
 #include "cstring.h"
 /* the following include is needed for sprintf */
@@ -90,7 +91,7 @@ static void testContext(void);
 static void doTailTest(void);
 
 static void testBracketOverflow(void);
-static void TestExplicitLevel0(void);
+static void TestExplicitLevel0();
 
 /* new BIDI API */
 static void testReorderingMode(void);
@@ -139,7 +140,7 @@ addComplexTest(TestNode** root) {
     addTest(root, testGetBaseDirection, "complex/bidi/testGetBaseDirection");
     addTest(root, testContext, "complex/bidi/testContext");
     addTest(root, testBracketOverflow, "complex/bidi/TestBracketOverflow");
-    addTest(root, TestExplicitLevel0, "complex/bidi/TestExplicitLevel0");
+    addTest(root, &TestExplicitLevel0, "complex/bidi/TestExplicitLevel0");
 
     addTest(root, doArabicShapingTest, "complex/arabic-shaping/ArabicShapingTest");
     addTest(root, doLamAlefSpecialVLTRArabicShapingTest, "complex/arabic-shaping/lamalef");
@@ -2437,6 +2438,143 @@ static void _testMisc(void) {
 
 /* arabic shaping ----------------------------------------------------------- */
 
+static int32_t
+doShapeArabic(const UChar *src, int32_t srcLength,
+    UChar *dest, int32_t destSize,
+    uint32_t options,
+    UErrorCode *pErrorCode) {
+
+    int32_t length = u_shapeArabic(src, srcLength,
+        dest, destSize,
+        options,
+        pErrorCode);
+
+    UChar u16Buf[1000 + sizeof(void *)];
+    u_memset(u16Buf, 0, sizeof(u16Buf) / sizeof(UChar));
+    if ((dest) || (destSize < 0))
+        u_strncpy(u16Buf, dest, length);
+
+    // Do input and output overlap?
+    if ((dest != NULL) && ((src >= dest && src < dest + destSize)
+        || (dest >= src && dest < src + srcLength))) {
+        return length;
+    }
+
+    UBool blnReturnError = FALSE;
+
+    // utext_openU8
+    {
+        UErrorCode status = U_ZERO_ERROR;
+        UConverter *u8Convertor = ucnv_open("UTF8", &status);
+
+        if ((U_FAILURE(status)) || (u8Convertor == NULL)) {
+            return;
+        }
+
+        char u8BufDst[1000 + sizeof(void *)];
+
+        memset(u8BufDst, 0, sizeof(u8BufDst) / sizeof(char));
+
+        UText* srcUt16 = utext_openUChars(NULL, src, srcLength, &status);
+        UText* dstUt8 = utext_openU8(NULL, u8BufDst, 0, (!dest) ? 0 : (destSize < 0 ? destSize : sizeof(u8BufDst)), &status);
+
+        if ((srcUt16) && (dstUt8) && (!U_FAILURE(status)))
+        {
+            int32_t u8LenDst = u_shapeUText(srcUt16,
+                dstUt8,
+                options,
+                &status);
+
+            int32_t u16Len = u8LenDst;
+            if (dest) {
+                u_memset(u16Buf, 0, sizeof(u16Buf) / sizeof(UChar));
+                u16Len = ucnv_toUChars(u8Convertor, u16Buf, sizeof(u16Buf), (const char *)u8BufDst, u8LenDst * sizeof(char), &status);
+            }
+
+            UBool blnError = TRUE;
+
+            if ((U_FAILURE(*pErrorCode)) && (*pErrorCode == status)) {
+                blnError = FALSE;
+            }
+            if ((status == U_BUFFER_OVERFLOW_ERROR) && ((!dest) || (u16Len == length))) {
+                blnError = FALSE;
+            }
+            if ((status != U_BUFFER_OVERFLOW_ERROR) && (!U_FAILURE(status)) && (u16Len == length) && (memcmp(u16Buf, dest, length) == 0)) {
+                blnError = FALSE;
+            }
+
+            if (blnError) {
+                log_err("failure in u_shapeArabic(utf8)\n");
+                blnReturnError = TRUE;
+            }
+
+            utext_close(srcUt16);
+            utext_close(dstUt8);
+        }
+
+        ucnv_close(u8Convertor);
+    }
+
+    // utext_openU32
+    {
+        UErrorCode status = U_ZERO_ERROR;
+        UConverter *u32Convertor = ucnv_open("UTF32", &status);
+
+        if ((U_FAILURE(status)) || (u32Convertor == NULL)) {
+            return;
+        }
+
+        UChar32 u32BufDst[1000 + sizeof(void *)];
+
+        memset(u32BufDst, 0, sizeof(u32BufDst) / sizeof(UChar32));
+        u32BufDst[0] = 0x0000FEFF;
+
+        UText* srcUt16 = utext_openUChars(NULL, src, srcLength, &status);
+        UText* dstUt32 = utext_openU32(NULL, &u32BufDst[1], 0, (!dest) ? 0 : (destSize < 0 ? destSize : sizeof(u32BufDst)), &status);
+
+        if ((srcUt16) && (dstUt32) && (!U_FAILURE(status)))
+        {
+            int32_t u32LenDst = u_shapeUText(srcUt16,
+                dstUt32,
+                options,
+                &status);
+
+            int32_t u16Len = u32LenDst;
+            if (dest) {
+                u_memset(u16Buf, 0, sizeof(u16Buf) / sizeof(UChar));
+                u16Len = ucnv_toUChars(u32Convertor, u16Buf, sizeof(u16Buf), (const char *)u32BufDst, (u32LenDst + 1) * sizeof(UChar32), &status);
+            }
+
+            UBool blnError = TRUE;
+
+            if ((U_FAILURE(*pErrorCode)) && (*pErrorCode == status)) {
+                blnError = FALSE;
+            }
+            if ((status == U_BUFFER_OVERFLOW_ERROR) && ((!dest) || (u16Len == length))) {
+                blnError = FALSE;
+            }
+            if ((status != U_BUFFER_OVERFLOW_ERROR) && (!U_FAILURE(status)) && (u16Len == length) && (memcmp(u16Buf, dest, length) == 0)) {
+                blnError = FALSE;
+            }
+
+            if (blnError) {
+                log_err("failure in u_shapeArabic(utf32)\n");
+                blnReturnError = TRUE;
+            }
+
+            utext_close(srcUt16);
+            utext_close(dstUt32);
+        }
+
+        ucnv_close(u32Convertor);
+    }
+
+    if (blnReturnError)
+        length = -2;
+
+    return length;
+}
+
 static void
 doArabicShapingTest(void) {
     static const UChar
@@ -2471,7 +2609,7 @@ doArabicShapingTest(void) {
 
     /* european->arabic */
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(source, UPRV_LENGTHOF(source),
+    length=doShapeArabic(source, UPRV_LENGTHOF(source),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_DIGITS_EN2AN|U_SHAPE_DIGIT_TYPE_AN,
                          &errorCode);
@@ -2481,7 +2619,7 @@ doArabicShapingTest(void) {
 
     /* arabic->european */
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(source, -1,
+    length=doShapeArabic(source, -1,
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_DIGITS_AN2EN|U_SHAPE_DIGIT_TYPE_AN_EXTENDED,
                          &errorCode);
@@ -2491,7 +2629,7 @@ doArabicShapingTest(void) {
 
     /* european->arabic with context, logical order, initial state not AL */
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(source, UPRV_LENGTHOF(source),
+    length=doShapeArabic(source, UPRV_LENGTHOF(source),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_DIGITS_ALEN2AN_INIT_LR|U_SHAPE_DIGIT_TYPE_AN,
                          &errorCode);
@@ -2501,7 +2639,7 @@ doArabicShapingTest(void) {
 
     /* european->arabic with context, logical order, initial state AL */
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(source, UPRV_LENGTHOF(source),
+    length=doShapeArabic(source, UPRV_LENGTHOF(source),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_DIGITS_ALEN2AN_INIT_AL|U_SHAPE_DIGIT_TYPE_AN_EXTENDED,
                          &errorCode);
@@ -2511,7 +2649,7 @@ doArabicShapingTest(void) {
 
     /* european->arabic with context, reverse order, initial state not AL */
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(source, UPRV_LENGTHOF(source),
+    length=doShapeArabic(source, UPRV_LENGTHOF(source),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_DIGITS_ALEN2AN_INIT_LR|U_SHAPE_DIGIT_TYPE_AN|U_SHAPE_TEXT_DIRECTION_VISUAL_LTR,
                          &errorCode);
@@ -2521,7 +2659,7 @@ doArabicShapingTest(void) {
 
     /* european->arabic with context, reverse order, initial state AL */
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(source, UPRV_LENGTHOF(source),
+    length=doShapeArabic(source, UPRV_LENGTHOF(source),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_DIGITS_ALEN2AN_INIT_AL|U_SHAPE_DIGIT_TYPE_AN_EXTENDED|U_SHAPE_TEXT_DIRECTION_VISUAL_LTR,
                          &errorCode);
@@ -2531,7 +2669,7 @@ doArabicShapingTest(void) {
 
     /* test noop */
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(source, UPRV_LENGTHOF(source),
+    length=doShapeArabic(source, UPRV_LENGTHOF(source),
                          dest, UPRV_LENGTHOF(dest),
                          0,
                          &errorCode);
@@ -2540,7 +2678,7 @@ doArabicShapingTest(void) {
     }
 
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(source, 0,
+    length=doShapeArabic(source, 0,
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_DIGITS_EN2AN|U_SHAPE_DIGIT_TYPE_AN,
                          &errorCode);
@@ -2550,7 +2688,7 @@ doArabicShapingTest(void) {
 
     /* preflight digit shaping */
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(source, UPRV_LENGTHOF(source),
+    length=doShapeArabic(source, UPRV_LENGTHOF(source),
                          NULL, 0,
                          U_SHAPE_DIGITS_EN2AN|U_SHAPE_DIGIT_TYPE_AN,
                          &errorCode);
@@ -2561,7 +2699,7 @@ doArabicShapingTest(void) {
 
     /* test illegal arguments */
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(NULL, UPRV_LENGTHOF(source),
+    length=doShapeArabic(NULL, UPRV_LENGTHOF(source),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_DIGITS_EN2AN|U_SHAPE_DIGIT_TYPE_AN,
                          &errorCode);
@@ -2570,7 +2708,7 @@ doArabicShapingTest(void) {
     }
 
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(source, -2,
+    length=doShapeArabic(source, -2,
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_DIGITS_EN2AN|U_SHAPE_DIGIT_TYPE_AN,
                          &errorCode);
@@ -2579,7 +2717,7 @@ doArabicShapingTest(void) {
     }
 
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(source, UPRV_LENGTHOF(source),
+    length=doShapeArabic(source, UPRV_LENGTHOF(source),
                          NULL, UPRV_LENGTHOF(dest),
                          U_SHAPE_DIGITS_EN2AN|U_SHAPE_DIGIT_TYPE_AN,
                          &errorCode);
@@ -2588,7 +2726,7 @@ doArabicShapingTest(void) {
     }
 
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(source, UPRV_LENGTHOF(source),
+    length=doShapeArabic(source, UPRV_LENGTHOF(source),
                          dest, -1,
                          U_SHAPE_DIGITS_EN2AN|U_SHAPE_DIGIT_TYPE_AN,
                          &errorCode);
@@ -2597,7 +2735,7 @@ doArabicShapingTest(void) {
     }
 
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(source, UPRV_LENGTHOF(source),
+    length=doShapeArabic(source, UPRV_LENGTHOF(source),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_DIGITS_RESERVED|U_SHAPE_DIGIT_TYPE_AN,
                          &errorCode);
@@ -2606,7 +2744,7 @@ doArabicShapingTest(void) {
     }
 
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(source, UPRV_LENGTHOF(source),
+    length=doShapeArabic(source, UPRV_LENGTHOF(source),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_DIGITS_EN2AN|U_SHAPE_DIGIT_TYPE_RESERVED,
                          &errorCode);
@@ -2615,7 +2753,7 @@ doArabicShapingTest(void) {
     }
 
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(source, UPRV_LENGTHOF(source),
+    length=doShapeArabic(source, UPRV_LENGTHOF(source),
                          (UChar *)(source+2), UPRV_LENGTHOF(dest), /* overlap source and destination */
                          U_SHAPE_DIGITS_EN2AN|U_SHAPE_DIGIT_TYPE_AN,
                          &errorCode);
@@ -2624,7 +2762,7 @@ doArabicShapingTest(void) {
     }
 
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(lamalef, UPRV_LENGTHOF(lamalef),
+    length=doShapeArabic(lamalef, UPRV_LENGTHOF(lamalef),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_LETTERS_UNSHAPE | U_SHAPE_LENGTH_GROW_SHRINK | U_SHAPE_TEXT_DIRECTION_VISUAL_LTR,
                          &errorCode);
@@ -2688,7 +2826,7 @@ doLamAlefSpecialVLTRArabicShapingTest(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(source, UPRV_LENGTHOF(source),
+    length=doShapeArabic(source, UPRV_LENGTHOF(source),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_LETTERS_SHAPE|U_SHAPE_LENGTH_FIXED_SPACES_NEAR|
                          U_SHAPE_TEXT_DIRECTION_VISUAL_LTR,
@@ -2700,7 +2838,7 @@ doLamAlefSpecialVLTRArabicShapingTest(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(source, UPRV_LENGTHOF(source),
+    length=doShapeArabic(source, UPRV_LENGTHOF(source),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_LETTERS_SHAPE|U_SHAPE_LENGTH_FIXED_SPACES_AT_END|
                          U_SHAPE_TEXT_DIRECTION_VISUAL_LTR,
@@ -2712,7 +2850,7 @@ doLamAlefSpecialVLTRArabicShapingTest(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(source, UPRV_LENGTHOF(source),
+    length=doShapeArabic(source, UPRV_LENGTHOF(source),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_LETTERS_SHAPE|U_SHAPE_LENGTH_FIXED_SPACES_AT_BEGINNING|
                          U_SHAPE_TEXT_DIRECTION_VISUAL_LTR,
@@ -2724,7 +2862,7 @@ doLamAlefSpecialVLTRArabicShapingTest(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(source, UPRV_LENGTHOF(source),
+    length=doShapeArabic(source, UPRV_LENGTHOF(source),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_LETTERS_SHAPE|U_SHAPE_LENGTH_GROW_SHRINK|
                          U_SHAPE_TEXT_DIRECTION_VISUAL_LTR,
@@ -2738,7 +2876,7 @@ doLamAlefSpecialVLTRArabicShapingTest(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(source, UPRV_LENGTHOF(source),
+    length=doShapeArabic(source, UPRV_LENGTHOF(source),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_LETTERS_SHAPE_TASHKEEL_ISOLATED|U_SHAPE_LENGTH_FIXED_SPACES_NEAR|
                          U_SHAPE_TEXT_DIRECTION_VISUAL_LTR,
@@ -2750,7 +2888,7 @@ doLamAlefSpecialVLTRArabicShapingTest(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(source, UPRV_LENGTHOF(source),
+    length=doShapeArabic(source, UPRV_LENGTHOF(source),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_LETTERS_SHAPE_TASHKEEL_ISOLATED|U_SHAPE_LENGTH_FIXED_SPACES_AT_END|
                          U_SHAPE_TEXT_DIRECTION_VISUAL_LTR,
@@ -2762,7 +2900,7 @@ doLamAlefSpecialVLTRArabicShapingTest(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(source, UPRV_LENGTHOF(source),
+    length=doShapeArabic(source, UPRV_LENGTHOF(source),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_LETTERS_SHAPE_TASHKEEL_ISOLATED|U_SHAPE_LENGTH_FIXED_SPACES_AT_BEGINNING|
                          U_SHAPE_TEXT_DIRECTION_VISUAL_LTR,
@@ -2774,7 +2912,7 @@ doLamAlefSpecialVLTRArabicShapingTest(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(source, UPRV_LENGTHOF(source),
+    length=doShapeArabic(source, UPRV_LENGTHOF(source),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_LETTERS_SHAPE_TASHKEEL_ISOLATED|U_SHAPE_LENGTH_GROW_SHRINK|
                          U_SHAPE_TEXT_DIRECTION_VISUAL_LTR,
@@ -2814,7 +2952,7 @@ doTashkeelSpecialVLTRArabicShapingTest(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(source, UPRV_LENGTHOF(source),
+    length=doShapeArabic(source, UPRV_LENGTHOF(source),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_LETTERS_SHAPE|U_SHAPE_LENGTH_FIXED_SPACES_NEAR|
                          U_SHAPE_TEXT_DIRECTION_VISUAL_LTR,
@@ -2826,7 +2964,7 @@ doTashkeelSpecialVLTRArabicShapingTest(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(source, UPRV_LENGTHOF(source),
+    length=doShapeArabic(source, UPRV_LENGTHOF(source),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_LETTERS_SHAPE_TASHKEEL_ISOLATED|U_SHAPE_LENGTH_FIXED_SPACES_NEAR|
                          U_SHAPE_TEXT_DIRECTION_VISUAL_LTR,
@@ -2868,7 +3006,7 @@ doLOGICALArabicDeShapingTest(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(source, UPRV_LENGTHOF(source),
+    length=doShapeArabic(source, UPRV_LENGTHOF(source),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_LETTERS_UNSHAPE|U_SHAPE_LENGTH_FIXED_SPACES_NEAR|
                          U_SHAPE_TEXT_DIRECTION_LOGICAL,
@@ -2880,7 +3018,7 @@ doLOGICALArabicDeShapingTest(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(source, UPRV_LENGTHOF(source),
+    length=doShapeArabic(source, UPRV_LENGTHOF(source),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_LETTERS_UNSHAPE|U_SHAPE_LENGTH_FIXED_SPACES_AT_END|
                          U_SHAPE_TEXT_DIRECTION_LOGICAL,
@@ -2892,7 +3030,7 @@ doLOGICALArabicDeShapingTest(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(source, UPRV_LENGTHOF(source),
+    length=doShapeArabic(source, UPRV_LENGTHOF(source),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_LETTERS_UNSHAPE|U_SHAPE_LENGTH_FIXED_SPACES_AT_BEGINNING|
                          U_SHAPE_TEXT_DIRECTION_LOGICAL,
@@ -2904,7 +3042,7 @@ doLOGICALArabicDeShapingTest(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(source, UPRV_LENGTHOF(source),
+    length=doShapeArabic(source, UPRV_LENGTHOF(source),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_LETTERS_UNSHAPE|U_SHAPE_LENGTH_GROW_SHRINK|
                          U_SHAPE_TEXT_DIRECTION_LOGICAL,
@@ -2990,7 +3128,7 @@ doArabicShapingTestForBug5421(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(persian_letters_source, UPRV_LENGTHOF(persian_letters_source),
+    length=doShapeArabic(persian_letters_source, UPRV_LENGTHOF(persian_letters_source),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_LETTERS_SHAPE|U_SHAPE_TEXT_DIRECTION_VISUAL_LTR,
                          &errorCode);
@@ -3001,7 +3139,7 @@ doArabicShapingTestForBug5421(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(tashkeel_aggregation_source, UPRV_LENGTHOF(tashkeel_aggregation_source),
+    length=doShapeArabic(tashkeel_aggregation_source, UPRV_LENGTHOF(tashkeel_aggregation_source),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_AGGREGATE_TASHKEEL|U_SHAPE_PRESERVE_PRESENTATION|
                          U_SHAPE_LETTERS_SHAPE_TASHKEEL_ISOLATED|U_SHAPE_TEXT_DIRECTION_VISUAL_LTR,
@@ -3013,7 +3151,7 @@ doArabicShapingTestForBug5421(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(untouched_presentation_source, UPRV_LENGTHOF(untouched_presentation_source),
+    length=doShapeArabic(untouched_presentation_source, UPRV_LENGTHOF(untouched_presentation_source),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_PRESERVE_PRESENTATION|
                          U_SHAPE_LETTERS_SHAPE|U_SHAPE_TEXT_DIRECTION_VISUAL_LTR,
@@ -3025,7 +3163,7 @@ doArabicShapingTestForBug5421(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(untouched_presentation_r_source, UPRV_LENGTHOF(untouched_presentation_r_source),
+    length=doShapeArabic(untouched_presentation_r_source, UPRV_LENGTHOF(untouched_presentation_r_source),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_PRESERVE_PRESENTATION|
                          U_SHAPE_LETTERS_SHAPE|U_SHAPE_TEXT_DIRECTION_LOGICAL,
@@ -3079,7 +3217,7 @@ doArabicShapingTestForBug8703(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(letters_source1, UPRV_LENGTHOF(letters_source1),
+    length=doShapeArabic(letters_source1, UPRV_LENGTHOF(letters_source1),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_TEXT_DIRECTION_VISUAL_RTL | U_SHAPE_TASHKEEL_BEGIN | U_SHAPE_LETTERS_SHAPE,
                          &errorCode);
@@ -3090,7 +3228,7 @@ doArabicShapingTestForBug8703(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(letters_source2, UPRV_LENGTHOF(letters_source2),
+    length=doShapeArabic(letters_source2, UPRV_LENGTHOF(letters_source2),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_TEXT_DIRECTION_VISUAL_RTL | U_SHAPE_TASHKEEL_END | U_SHAPE_LETTERS_SHAPE,
                          &errorCode);
@@ -3101,7 +3239,7 @@ doArabicShapingTestForBug8703(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(letters_source3, UPRV_LENGTHOF(letters_source3),
+    length=doShapeArabic(letters_source3, UPRV_LENGTHOF(letters_source3),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_TEXT_DIRECTION_VISUAL_RTL | U_SHAPE_TASHKEEL_RESIZE | U_SHAPE_LETTERS_SHAPE,
                          &errorCode);
@@ -3112,7 +3250,7 @@ doArabicShapingTestForBug8703(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(letters_source4, UPRV_LENGTHOF(letters_source4),
+    length=doShapeArabic(letters_source4, UPRV_LENGTHOF(letters_source4),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_TEXT_DIRECTION_VISUAL_RTL | U_SHAPE_TASHKEEL_REPLACE_BY_TATWEEL | U_SHAPE_LETTERS_SHAPE,
                          &errorCode);
@@ -3123,7 +3261,7 @@ doArabicShapingTestForBug8703(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(letters_source5, UPRV_LENGTHOF(letters_source5),
+    length=doShapeArabic(letters_source5, UPRV_LENGTHOF(letters_source5),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_TEXT_DIRECTION_VISUAL_LTR | U_SHAPE_TASHKEEL_BEGIN | U_SHAPE_LETTERS_SHAPE,
                          &errorCode);
@@ -3134,7 +3272,7 @@ doArabicShapingTestForBug8703(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(letters_source6, UPRV_LENGTHOF(letters_source6),
+    length=doShapeArabic(letters_source6, UPRV_LENGTHOF(letters_source6),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_TEXT_DIRECTION_VISUAL_LTR | U_SHAPE_TASHKEEL_END | U_SHAPE_LETTERS_SHAPE,
                          &errorCode);
@@ -3145,7 +3283,7 @@ doArabicShapingTestForBug8703(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(letters_source7, UPRV_LENGTHOF(letters_source7),
+    length=doShapeArabic(letters_source7, UPRV_LENGTHOF(letters_source7),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_TEXT_DIRECTION_VISUAL_LTR | U_SHAPE_TASHKEEL_RESIZE | U_SHAPE_LETTERS_SHAPE,
                          &errorCode);
@@ -3156,7 +3294,7 @@ doArabicShapingTestForBug8703(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(letters_source8, UPRV_LENGTHOF(letters_source8),
+    length=doShapeArabic(letters_source8, UPRV_LENGTHOF(letters_source8),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_TEXT_DIRECTION_VISUAL_LTR | U_SHAPE_TASHKEEL_REPLACE_BY_TATWEEL | U_SHAPE_LETTERS_SHAPE,
                          &errorCode);
@@ -3261,7 +3399,7 @@ doArabicShapingTestForBug9024(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(letters_source1, UPRV_LENGTHOF(letters_source1),
+    length=doShapeArabic(letters_source1, UPRV_LENGTHOF(letters_source1),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_TEXT_DIRECTION_VISUAL_RTL | U_SHAPE_TASHKEEL_BEGIN | U_SHAPE_LETTERS_SHAPE,
                          &errorCode);
@@ -3272,7 +3410,7 @@ doArabicShapingTestForBug9024(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(letters_source2, UPRV_LENGTHOF(letters_source2),
+    length=doShapeArabic(letters_source2, UPRV_LENGTHOF(letters_source2),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_TEXT_DIRECTION_VISUAL_RTL | U_SHAPE_TASHKEEL_END | U_SHAPE_LETTERS_SHAPE,
                          &errorCode);
@@ -3283,7 +3421,7 @@ doArabicShapingTestForBug9024(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(letters_source3, UPRV_LENGTHOF(letters_source3),
+    length=doShapeArabic(letters_source3, UPRV_LENGTHOF(letters_source3),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_TEXT_DIRECTION_VISUAL_RTL | U_SHAPE_TASHKEEL_RESIZE | U_SHAPE_LETTERS_SHAPE,
                          &errorCode);
@@ -3294,7 +3432,7 @@ doArabicShapingTestForBug9024(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(letters_source4, UPRV_LENGTHOF(letters_source4),
+    length=doShapeArabic(letters_source4, UPRV_LENGTHOF(letters_source4),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_TEXT_DIRECTION_VISUAL_RTL | U_SHAPE_TASHKEEL_REPLACE_BY_TATWEEL | U_SHAPE_LETTERS_SHAPE,
                          &errorCode);
@@ -3305,7 +3443,7 @@ doArabicShapingTestForBug9024(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(letters_source5, UPRV_LENGTHOF(letters_source5),
+    length=doShapeArabic(letters_source5, UPRV_LENGTHOF(letters_source5),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_TEXT_DIRECTION_VISUAL_LTR | U_SHAPE_TASHKEEL_BEGIN | U_SHAPE_LETTERS_SHAPE,
                          &errorCode);
@@ -3316,7 +3454,7 @@ doArabicShapingTestForBug9024(void) {
 
     errorCode=U_ZERO_ERROR;
 
-    length=u_shapeArabic(letters_source6, UPRV_LENGTHOF(letters_source6),
+    length=doShapeArabic(letters_source6, UPRV_LENGTHOF(letters_source6),
                          dest, UPRV_LENGTHOF(dest),
                          U_SHAPE_TEXT_DIRECTION_VISUAL_LTR | U_SHAPE_TASHKEEL_END | U_SHAPE_LETTERS_SHAPE,
                          &errorCode);
@@ -3340,7 +3478,7 @@ static void _testPresentationForms(const UChar* in) {
   /* Testing isolated shaping */
   src[0] = in[GENERIC];
   errorCode=U_ZERO_ERROR;
-  length=u_shapeArabic(src, 1,
+  length=doShapeArabic(src, 1,
                        dst, 1,
                        U_SHAPE_LETTERS_SHAPE,
                        &errorCode);
@@ -3348,7 +3486,7 @@ static void _testPresentationForms(const UChar* in) {
       log_err("failure in u_shapeArabic(_testAllForms: shaping isolated): %x\n", in[GENERIC]);
   }
   errorCode=U_ZERO_ERROR;
-  length=u_shapeArabic(dst, 1,
+  length=doShapeArabic(dst, 1,
                        src, 1,
                        U_SHAPE_LETTERS_UNSHAPE,
                        &errorCode);
@@ -3361,7 +3499,7 @@ static void _testPresentationForms(const UChar* in) {
   src[1] = in[GENERIC];
   if (in[FINAL] != 0) {
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(src, 2,
+    length=doShapeArabic(src, 2,
                          dst, 2,
                          U_SHAPE_LETTERS_SHAPE,
                          &errorCode);
@@ -3369,7 +3507,7 @@ static void _testPresentationForms(const UChar* in) {
       log_err("failure in u_shapeArabic(_testAllForms: shaping final): %x\n", in[GENERIC]);
     }
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(dst, 2,
+    length=doShapeArabic(dst, 2,
                          src, 2,
                          U_SHAPE_LETTERS_UNSHAPE,
                          &errorCode);
@@ -3378,7 +3516,7 @@ static void _testPresentationForms(const UChar* in) {
     }
   } else {
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(src, 2,
+    length=doShapeArabic(src, 2,
                          dst, 2,
                          U_SHAPE_LETTERS_SHAPE,
                          &errorCode);
@@ -3386,7 +3524,7 @@ static void _testPresentationForms(const UChar* in) {
       log_err("failure in u_shapeArabic(_testAllForms: shaping final): %x\n", in[GENERIC]);
     }
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(dst, 2,
+    length=doShapeArabic(dst, 2,
                          src, 2,
                          U_SHAPE_LETTERS_UNSHAPE,
                          &errorCode);
@@ -3401,7 +3539,7 @@ static void _testPresentationForms(const UChar* in) {
   if (in[INITIAL] != 0) {
     /* Testing characters that have an initial form */
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(src, 2,
+    length=doShapeArabic(src, 2,
                          dst, 2,
                          U_SHAPE_LETTERS_SHAPE,
                          &errorCode);
@@ -3409,7 +3547,7 @@ static void _testPresentationForms(const UChar* in) {
       log_err("failure in u_shapeArabic(_testAllForms: shaping initial): %x\n", in[GENERIC]);
     }
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(dst, 2,
+    length=doShapeArabic(dst, 2,
                          src, 2,
                          U_SHAPE_LETTERS_UNSHAPE,
                          &errorCode);
@@ -3419,7 +3557,7 @@ static void _testPresentationForms(const UChar* in) {
   } else {
     /* Testing characters that do not have an initial form */
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(src, 2,
+    length=doShapeArabic(src, 2,
                          dst, 2,
                          U_SHAPE_LETTERS_SHAPE,
                          &errorCode);
@@ -3427,7 +3565,7 @@ static void _testPresentationForms(const UChar* in) {
       log_err("failure in u_shapeArabic(_testTwoForms: shaping initial): %x\n", in[GENERIC]);
     }
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(dst, 2,
+    length=doShapeArabic(dst, 2,
                          src, 2,
                          U_SHAPE_LETTERS_UNSHAPE,
                          &errorCode);
@@ -3443,7 +3581,7 @@ static void _testPresentationForms(const UChar* in) {
   errorCode=U_ZERO_ERROR;
   if (in[MEDIAL] != 0) {
     /* Testing characters that have an medial form */
-    length=u_shapeArabic(src, 3,
+    length=doShapeArabic(src, 3,
                          dst, 3,
                          U_SHAPE_LETTERS_SHAPE,
                          &errorCode);
@@ -3451,7 +3589,7 @@ static void _testPresentationForms(const UChar* in) {
       log_err("failure in u_shapeArabic(_testAllForms: shaping medial): %x\n", in[GENERIC]);
     }
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(dst, 3,
+    length=doShapeArabic(dst, 3,
                          src, 3,
                          U_SHAPE_LETTERS_UNSHAPE,
                          &errorCode);
@@ -3461,7 +3599,7 @@ static void _testPresentationForms(const UChar* in) {
   } else {
     /* Testing characters that do not have an medial form */
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(src, 3,
+    length=doShapeArabic(src, 3,
                          dst, 3,
                          U_SHAPE_LETTERS_SHAPE,
                          &errorCode);
@@ -3469,7 +3607,7 @@ static void _testPresentationForms(const UChar* in) {
       log_err("failure in u_shapeArabic(_testTwoForms: shaping medial): %x\n", in[GENERIC]);
     }
     errorCode=U_ZERO_ERROR;
-    length=u_shapeArabic(dst, 3,
+    length=doShapeArabic(dst, 3,
                          src, 3,
                          U_SHAPE_LETTERS_UNSHAPE,
                          &errorCode);
@@ -4927,7 +5065,7 @@ testBracketOverflow(void) {
     ubidi_close(bidi);
 }
 
-static void TestExplicitLevel0(void) {
+static void TestExplicitLevel0() {
     // The following used to fail with an error, see ICU ticket #12922.
     static const UChar text[2] = { 0x202d, 0x05d0 };
     static UBiDiLevel embeddings[2] = { 0, 0 };

@@ -14,8 +14,9 @@
 *
 *   created on: 1999aug06
 *   created by: Markus W. Scherer, updated by Matitiahu Allouche
-*   modified:   2018-11-22, Paul Werbicki - added UText support
 *
+*   Contributions:
+*   UText enhancements by Paul Werbicki
 */
 
 #include "cmemory.h"

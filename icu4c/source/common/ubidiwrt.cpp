@@ -14,8 +14,9 @@
 *
 *   created on: 1999aug06
 *   created by: Markus W. Scherer, updated by Matitiahu Allouche
-*   modified:   2018-11-22, Paul Werbicki - added UText support
 *
+*   Contributions:
+*   UText enhancements by Paul Werbicki
 */
 
 /*
@@ -54,6 +55,11 @@ static int32_t
 utext_append32(UText *ut, int64_t start, UChar32 uchar, UErrorCode *pErrorCode) {
     UChar uchars[2] = { (UChar)uchar, 0 };
     int32_t length = 1;
+    int32_t nativeLength = 0;
+
+    if (pErrorCode == NULL) {
+        return 0;
+    }
 
     if ((!U16_IS_SINGLE(uchar)) || (U_IS_SUPPLEMENTARY(uchar)))
     {
@@ -62,11 +68,15 @@ utext_append32(UText *ut, int64_t start, UChar32 uchar, UErrorCode *pErrorCode) 
         length = 2;
     };
 
-    if ((pErrorCode != NULL) && (!U_FAILURE(*pErrorCode))) {
-        utext_replace(ut, start, start, uchars, length, pErrorCode);
+    if (!U_FAILURE(*pErrorCode)) {
+        nativeLength = utext_replace(ut, start, start, uchars, length, pErrorCode);
     }
 
-    return length;
+    if (*pErrorCode == U_BUFFER_OVERFLOW_ERROR) {
+        nativeLength = length;
+    }
+
+    return nativeLength;
 }
 
 /*
@@ -89,22 +99,23 @@ doWriteForward(UText *srcUt, int32_t srcNativeStart, int32_t srcNativeLength,
 
     int32_t dstNativeLimit = dstNativeStart;
     UTEXT_SETNATIVEINDEX(srcUt, srcNativeStart);
+    int32_t nativeStart = srcNativeStart;
     UChar32 uchar = UTEXT_NEXT32(srcUt);
-    int32_t srcNativeIndex = (int32_t)UTEXT_GETNATIVEINDEX(srcUt); // srcNativeIndex represents native index after code point
+    int32_t nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(srcUt); // nativeLimit represents native index after code point
 
     // Optimize for several combinations of options
     switch (options & (UBIDI_REMOVE_BIDI_CONTROLS | UBIDI_DO_MIRRORING)) {
     case 0: {
-        for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL) && (srcNativeIndex <= srcNativeStart + srcNativeLength);
-            uchar = UTEXT_NEXT32(srcUt), srcNativeIndex = (int32_t)UTEXT_GETNATIVEINDEX(srcUt)) {
+        for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL) && (nativeStart < srcNativeStart + srcNativeLength);
+            nativeStart = nativeLimit, uchar = UTEXT_NEXT32(srcUt), nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(srcUt)) {
             dstNativeLimit += utext_append32(dstUt, dstNativeLimit, uchar, pErrorCode);
         }
         break;
     }
     case UBIDI_DO_MIRRORING: {
         // Do mirroring
-        for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL) && (srcNativeIndex <= srcNativeStart + srcNativeLength);
-            uchar = UTEXT_NEXT32(srcUt), srcNativeIndex = (int32_t)UTEXT_GETNATIVEINDEX(srcUt)) {
+        for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL) && (nativeStart < srcNativeStart + srcNativeLength);
+            nativeStart = nativeLimit, uchar = UTEXT_NEXT32(srcUt), nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(srcUt)) {
             uchar = u_charMirror(uchar);
             dstNativeLimit += utext_append32(dstUt, dstNativeLimit, uchar, pErrorCode);
         }
@@ -112,8 +123,8 @@ doWriteForward(UText *srcUt, int32_t srcNativeStart, int32_t srcNativeLength,
     }
     case UBIDI_REMOVE_BIDI_CONTROLS: {
         // Copy the LTR run and remove any BiDi control characters
-        for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL) && (srcNativeIndex <= srcNativeStart + srcNativeLength);
-            uchar = UTEXT_NEXT32(srcUt), srcNativeIndex = (int32_t)UTEXT_GETNATIVEINDEX(srcUt)) {
+        for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL) && (nativeStart < srcNativeStart + srcNativeLength);
+            nativeStart = nativeLimit, uchar = UTEXT_NEXT32(srcUt), nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(srcUt)) {
             if (!IS_BIDI_CONTROL_CHAR(uchar)) {
                 dstNativeLimit += utext_append32(dstUt, dstNativeLimit, uchar, pErrorCode);
             }
@@ -122,8 +133,8 @@ doWriteForward(UText *srcUt, int32_t srcNativeStart, int32_t srcNativeLength,
     }
     default: {
         // Remove BiDi control characters and do mirroring
-        for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL) && (srcNativeIndex <= srcNativeStart + srcNativeLength);
-            uchar = UTEXT_NEXT32(srcUt), srcNativeIndex = (int32_t)UTEXT_GETNATIVEINDEX(srcUt)) {
+        for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL) && (nativeStart < srcNativeStart + srcNativeLength);
+            nativeStart = nativeLimit, uchar = UTEXT_NEXT32(srcUt), nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(srcUt)) {
             if (!IS_BIDI_CONTROL_CHAR(uchar)) {
                 uchar = u_charMirror(uchar);
                 dstNativeLimit += utext_append32(dstUt, dstNativeLimit, uchar, pErrorCode);
@@ -140,15 +151,15 @@ doWriteForward(UText *srcUt, int32_t srcNativeStart, int32_t srcNativeLength,
 
         // Preflight the length
         int32_t length;
-        for (; (uchar != U_SENTINEL) && (srcNativeIndex <= srcNativeStart + srcNativeLength);
-            uchar = UTEXT_NEXT32(srcUt), srcNativeIndex = (int32_t)UTEXT_GETNATIVEINDEX(srcUt)) {
-            length = srcNativeIndex - j;
+        for (; (uchar != U_SENTINEL) && (nativeLimit <= srcNativeStart + srcNativeLength);
+            uchar = UTEXT_NEXT32(srcUt), nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(srcUt)) {
+            length = nativeLimit - j;
 
             if (!((options & UBIDI_REMOVE_BIDI_CONTROLS) && (IS_BIDI_CONTROL_CHAR(uchar)))) {
                 dstNativeLimit += length;
             }
 
-            j = srcNativeIndex;
+            j = nativeLimit;
         }
     }
 
@@ -220,17 +231,21 @@ doWriteReverse(UText *srcUt, int32_t srcNativeStart, int32_t srcNativeLength,
                 }
 
                 // Copy this "user character"
-                int32_t length = j - srcNativeIndex;
-                int32_t k = 0;
+                int32_t srcLength = j - srcNativeIndex;
+                int32_t dstLength = 0;
+                int32_t nativeStart = (int32_t)UTEXT_GETNATIVEINDEX(srcUt);
                 uchar = UTEXT_NEXT32(srcUt);
+                int32_t nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(srcUt);
 
-                for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL) && (length > 0);
-                    length -= k, uchar = UTEXT_NEXT32(srcUt)) {
-                    k = utext_append32(dstUt, dstNativeLimit, uchar, pErrorCode);
+                for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL) && (srcLength > 0);
+                    nativeStart = nativeLimit, uchar = UTEXT_NEXT32(srcUt), nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(srcUt))
+                {
+                    dstLength = utext_append32(dstUt, dstNativeLimit, uchar, pErrorCode);
                     if (!U_FAILURE(*pErrorCode)) {
-                        dstNativeLimit += k;
-                        j -= k;
+                        dstNativeLimit += dstLength;
+                        j -= nativeLimit - nativeStart;
                     }
+                    srcLength -= nativeLimit - nativeStart;
                 }
 
                 UTEXT_SETNATIVEINDEX(srcUt, j);
@@ -267,20 +282,25 @@ doWriteReverse(UText *srcUt, int32_t srcNativeStart, int32_t srcNativeLength,
             }
 
             // Copy this "user character"
-            int32_t length = j - srcNativeIndex;
-            int32_t k = 0;
+            int32_t srcLength = j - srcNativeIndex;
+            int32_t dstLength = 0;
+
+            int32_t nativeStart = (int32_t)UTEXT_GETNATIVEINDEX(srcUt);
             uchar = UTEXT_NEXT32(srcUt);
+            int32_t nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(srcUt);
 
             if (options & UBIDI_DO_MIRRORING) // Mirror only the base character
                 uchar = u_charMirror(uchar);
 
-            for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL) && (length > 0);
-                length -= k, uchar = UTEXT_NEXT32(srcUt)) {
-                k = utext_append32(dstUt, dstNativeLimit, uchar, pErrorCode);
+            for (; (!U_FAILURE(*pErrorCode)) && (uchar != U_SENTINEL) && (srcLength > 0);
+                nativeStart = nativeLimit, uchar = UTEXT_NEXT32(srcUt), nativeLimit = (int32_t)UTEXT_GETNATIVEINDEX(srcUt))
+            {
+                dstLength = utext_append32(dstUt, dstNativeLimit, uchar, pErrorCode);
                 if (!U_FAILURE(*pErrorCode)) {
-                    dstNativeLimit += k;
-                    j -= k;
+                    dstNativeLimit += dstLength;
+                    j -= nativeLimit - nativeStart;
                 }
+                srcLength -= nativeLimit - nativeStart;
             }
 
             UTEXT_SETNATIVEINDEX(srcUt, j);
@@ -373,9 +393,17 @@ ubidi_writeReverse(const UChar *src, int32_t srcLength,
         return 0;
 
     UText dstUt = UTEXT_INITIALIZER;
-    utext_openU16(&dstUt, dest, 0, destSize, pErrorCode);
-    if (U_FAILURE(*pErrorCode))
-        return 0;
+    UChar preFlight[1];
+    if (dest == NULL) {
+        utext_openU16(&dstUt, preFlight, 0, 0, pErrorCode);
+        if (U_FAILURE(*pErrorCode))
+            return 0;
+    }
+    else {
+        utext_openU16(&dstUt, dest, 0, destSize, pErrorCode);
+        if (U_FAILURE(*pErrorCode))
+            return 0;
+    }
 
     // A stack allocated UText wrapping a UChar * string
     // can be dumped without explicitly closing it.
@@ -654,9 +682,17 @@ ubidi_writeReordered(UBiDi *pBiDi,
     }
 
     UText dstUt = UTEXT_INITIALIZER;
-    utext_openU16(&dstUt, dest, 0, destSize, pErrorCode);
-    if (U_FAILURE(*pErrorCode))
-        return 0;
+    UChar preFlight[1];
+    if (dest == NULL) {
+        utext_openU16(&dstUt, preFlight, 0, 0, pErrorCode);
+        if (U_FAILURE(*pErrorCode))
+            return 0;
+    }
+    else {
+        utext_openU16(&dstUt, dest, 0, destSize, pErrorCode);
+        if (U_FAILURE(*pErrorCode))
+            return 0;
+    }
 
     // A stack allocated UText wrapping a UChar * string
     // can be dumped without explicitly closing it.

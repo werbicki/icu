@@ -14,6 +14,9 @@
 *
 *   created on: 2004oct06
 *   created by: Markus W. Scherer
+*
+*   Contributions:
+*   UText enhancements by Paul Werbicki
 */
 
 #ifndef __UTEXT_H__
@@ -135,8 +138,6 @@
  *
  */
 
-
-
 #include "unicode/utypes.h"
 #include "unicode/uchar.h"
 #if U_SHOW_CPLUSPLUS_API
@@ -145,7 +146,6 @@
 #include "unicode/unistr.h"
 #include "unicode/chariter.h"
 #endif
-
 
 U_CDECL_BEGIN
 
@@ -158,7 +158,6 @@ typedef struct UText UText; /**< C typedef for struct UText. @stable ICU 3.6 */
  *   C Functions for creating UText wrappers around various kinds of text strings.
  *
  ****************************************************************************************/
-
 
  /**
    * Close function for UText instances.
@@ -432,62 +431,61 @@ utext_openCharacterIterator(UText *ut, icu::CharacterIterator *ci, UErrorCode *s
 #endif
 
 /**
-  *  Clone a UText.  This is much like opening a UText where the source text is itself
-  *  another UText.
-  *
-  *  A deep clone will copy both the UText data structures and the underlying text.
-  *  The original and cloned UText will operate completely independently; modifications
-  *  made to the text in one will not affect the other.  Text providers are not
-  *  required to support deep clones.  The user of clone() must check the status return
-  *  and be prepared to handle failures.
-  *
-  *  The standard UText implementations for UTF8, UChar *, UnicodeString and
-  *  Replaceable all support deep cloning.
-  *
-  *  The UText returned from a deep clone will be writable, assuming that the text
-  *  provider is able to support writing, even if the source UText had been made
-  *  non-writable by means of UText_freeze().
-  *
-  *  A shallow clone replicates only the UText data structures; it does not make
-  *  a copy of the underlying text.  Shallow clones can be used as an efficient way to
-  *  have multiple iterators active in a single text string that is not being
-  *  modified.
-  *
-  *  A shallow clone operation will not fail, barring truly exceptional conditions such
-  *  as memory allocation failures.
-  *
-  *  Shallow UText clones should be avoided if the UText functions that modify the
-  *  text are expected to be used, either on the original or the cloned UText.
-  *  Any such modifications  can cause unpredictable behavior.  Read Only
-  *  shallow clones provide some protection against errors of this type by
-  *  disabling text modification via the cloned UText.
-  *
-  *  A shallow clone made with the readOnly parameter == FALSE will preserve the
-  *  utext_isWritable() state of the source object.  Note, however, that
-  *  write operations must be avoided while more than one UText exists that refer
-  *  to the same underlying text.
-  *
-  *  A UText and its clone may be safely concurrently accessed by separate threads.
-  *  This is true for read access only with shallow clones, and for both read and
-  *  write access with deep clones.
-  *  It is the responsibility of the Text Provider to ensure that this thread safety
-  *  constraint is met.
-  *
-  *  @param dest   A UText struct to be filled in with the result of the clone operation,
-  *                or NULL if the clone function should heap-allocate a new UText struct.
-  *                If non-NULL, must refer to an already existing UText, which will then
-  *                be reset to become the clone.
-  *  @param src    The UText to be cloned.
-  *  @param deep   TRUE to request a deep clone, FALSE for a shallow clone.
-  *  @param readOnly TRUE to request that the cloned UText have read only access to the
-  *                underlying text.
-
-  *  @param status Errors are returned here.  For deep clones, U_UNSUPPORTED_ERROR
-  *                will be returned if the text provider is unable to clone the
-  *                original text.
-  *  @return       The newly created clone, or NULL if the clone operation failed.
-  *  @stable ICU 3.4
-  */
+ *  Clone a UText.  This is much like opening a UText where the source text is itself
+ *  another UText.
+ *
+ *  A deep clone will copy both the UText data structures and the underlying text.
+ *  The original and cloned UText will operate completely independently; modifications
+ *  made to the text in one will not affect the other.  Text providers are not
+ *  required to support deep clones.  The user of clone() must check the status return
+ *  and be prepared to handle failures.
+ *
+ *  The standard UText implementations for UTF8, UChar *, UnicodeString and
+ *  Replaceable all support deep cloning.
+ *
+ *  The UText returned from a deep clone will be writable, assuming that the text
+ *  provider is able to support writing, even if the source UText had been made
+ *  non-writable by means of UText_freeze().
+ *
+ *  A shallow clone replicates only the UText data structures; it does not make
+ *  a copy of the underlying text.  Shallow clones can be used as an efficient way to
+ *  have multiple iterators active in a single text string that is not being
+ *  modified.
+ *
+ *  A shallow clone operation will not fail, barring truly exceptional conditions such
+ *  as memory allocation failures.
+ *
+ *  Shallow UText clones should be avoided if the UText functions that modify the
+ *  text are expected to be used, either on the original or the cloned UText.
+ *  Any such modifications  can cause unpredictable behavior.  Read Only
+ *  shallow clones provide some protection against errors of this type by
+ *  disabling text modification via the cloned UText.
+ *
+ *  A shallow clone made with the readOnly parameter == FALSE will preserve the
+ *  utext_isWritable() state of the source object.  Note, however, that
+ *  write operations must be avoided while more than one UText exists that refer
+ *  to the same underlying text.
+ *
+ *  A UText and its clone may be safely concurrently accessed by separate threads.
+ *  This is true for read access only with shallow clones, and for both read and
+ *  write access with deep clones.
+ *  It is the responsibility of the Text Provider to ensure that this thread safety
+ *  constraint is met.
+ *
+ *  @param dest   A UText struct to be filled in with the result of the clone operation,
+ *                or NULL if the clone function should heap-allocate a new UText struct.
+ *                If non-NULL, must refer to an already existing UText, which will then
+ *                be reset to become the clone.
+ *  @param src    The UText to be cloned.
+ *  @param deep   TRUE to request a deep clone, FALSE for a shallow clone.
+ *  @param readOnly TRUE to request that the cloned UText have read only access to the
+ *                underlying text.
+ *  @param status Errors are returned here.  For deep clones, U_UNSUPPORTED_ERROR
+ *                will be returned if the text provider is unable to clone the
+ *                original text.
+ *  @return       The newly created clone, or NULL if the clone operation failed.
+ *  @stable ICU 3.4
+ */
 U_STABLE UText * U_EXPORT2
 utext_clone(UText *dest, const UText *src, UBool deep, UBool readOnly, UErrorCode *status);
 
@@ -815,78 +813,79 @@ utext_extract(UText *ut,
  ************************************************************************************/
 
 #ifndef U_HIDE_INTERNAL_API
- /**
-  * inline version of utext_current32(), for performance-critical situations.
-  *
-  * Get the code point at the current iteration position of the UText.
-  * Returns U_SENTINEL (-1) if the position is at the end of the
-  * text.
-  *
-  * @internal ICU 4.4 technology preview
-  */
+
+/**
+ * inline version of utext_current32(), for performance-critical situations.
+ *
+ * Get the code point at the current iteration position of the UText.
+ * Returns U_SENTINEL (-1) if the position is at the end of the
+ * text.
+ *
+ * @internal ICU 4.4 technology preview
+ */
 #define UTEXT_CURRENT32(ut)  \
     ((ut)->chunkOffset < (ut)->chunkLength && ((ut)->chunkContents)[(ut)->chunkOffset]<0xd800 ? \
     ((ut)->chunkContents)[((ut)->chunkOffset)] : utext_current32(ut))
 #endif  /* U_HIDE_INTERNAL_API */
 
-  /**
-   * inline version of utext_next32(), for performance-critical situations.
-   *
-   * Get the code point at the current iteration position of the UText, and
-   * advance the position to the first index following the character.
-   * This is a post-increment operation.
-   * Returns U_SENTINEL (-1) if the position is at the end of the
-   * text.
-   *
-   * @stable ICU 3.4
-   */
+ /**
+  * inline version of utext_next32(), for performance-critical situations.
+  *
+  * Get the code point at the current iteration position of the UText, and
+  * advance the position to the first index following the character.
+  * This is a post-increment operation.
+  * Returns U_SENTINEL (-1) if the position is at the end of the
+  * text.
+  *
+  * @stable ICU 3.4
+  */
 #define UTEXT_NEXT32(ut)  \
     ((ut)->chunkOffset < (ut)->chunkLength && ((ut)->chunkContents)[(ut)->chunkOffset]<0xd800 ? \
     ((ut)->chunkContents)[((ut)->chunkOffset)++] : utext_next32(ut))
 
-   /**
-    * inline version of utext_previous32(), for performance-critical situations.
-    *
-    *  Move the iterator position to the character (code point) whose
-    *  index precedes the current position, and return that character.
-    *  This is a pre-decrement operation.
-    *  Returns U_SENTINEL (-1) if the position is at the start of the  text.
-    *
-    * @stable ICU 3.4
-    */
+ /**
+  * inline version of utext_previous32(), for performance-critical situations.
+  *
+  *  Move the iterator position to the character (code point) whose
+  *  index precedes the current position, and return that character.
+  *  This is a pre-decrement operation.
+  *  Returns U_SENTINEL (-1) if the position is at the start of the  text.
+  *
+  * @stable ICU 3.4
+  */
 #define UTEXT_PREVIOUS32(ut)  \
     ((ut)->chunkOffset > 0 && \
      (ut)->chunkContents[(ut)->chunkOffset-1] < 0xd800 ? \
           (ut)->chunkContents[--((ut)->chunkOffset)]  :  utext_previous32(ut))
 
-    /**
-      *  inline version of utext_getNativeIndex(), for performance-critical situations.
-      *
-      * Get the current iterator position, which can range from 0 to
-      * the length of the text.
-      * The position is a native index into the input text, in whatever format it
-      * may have (possibly UTF-8 for example), and may not always be the same as
-      * the corresponding UChar (UTF-16) index.
-      * The returned position will always be aligned to a code point boundary.
-      *
-      * @stable ICU 3.6
-      */
+ /**
+   *  inline version of utext_getNativeIndex(), for performance-critical situations.
+   *
+   * Get the current iterator position, which can range from 0 to
+   * the length of the text.
+   * The position is a native index into the input text, in whatever format it
+   * may have (possibly UTF-8 for example), and may not always be the same as
+   * the corresponding UChar (UTF-16) index.
+   * The returned position will always be aligned to a code point boundary.
+   *
+   * @stable ICU 3.6
+   */
 #define UTEXT_GETNATIVEINDEX(ut)                       \
     ((ut)->chunkOffset <= (ut)->nativeIndexingLimit?   \
         (ut)->chunkNativeStart+(ut)->chunkOffset :     \
         (ut)->pFuncs->mapOffsetToNative(ut))    
 
-      /**
-        *  inline version of utext_setNativeIndex(), for performance-critical situations.
-        *
-        * Set the current iteration position to the nearest code point
-        * boundary at or preceding the specified index.
-        * The index is in the native units of the original input text.
-        * If the index is out of range, it will be pinned to be within
-        * the range of the input text.
-        *
-        * @stable ICU 3.8
-        */
+ /**
+   *  inline version of utext_setNativeIndex(), for performance-critical situations.
+   *
+   * Set the current iteration position to the nearest code point
+   * boundary at or preceding the specified index.
+   * The index is in the native units of the original input text.
+   * If the index is out of range, it will be pinned to be within
+   * the range of the input text.
+   *
+   * @stable ICU 3.8
+   */
 #define UTEXT_SETNATIVEINDEX(ut, ix)                       \
     { int64_t __offset = (ix) - (ut)->chunkNativeStart; \
       if (__offset>=0 && __offset<(int64_t)(ut)->nativeIndexingLimit && (ut)->chunkContents[__offset]<0xdc00) { \
@@ -894,50 +893,45 @@ utext_extract(UText *ut,
       } else { \
           utext_setNativeIndex((ut), (ix)); } }
 
+/************************************************************************************
+ *
+ *   Functions related to writing or modifying the text.
+ *   These will work only with modifiable UTexts.  Attempting to
+ *   modify a read-only UText will return an error status.
+ *
+ ************************************************************************************/
 
-
-        /************************************************************************************
-         *
-         *   Functions related to writing or modifying the text.
-         *   These will work only with modifiable UTexts.  Attempting to
-         *   modify a read-only UText will return an error status.
-         *
-         ************************************************************************************/
-
-
-         /**
-          *  Return TRUE if the text can be written (modified) with utext_replace() or
-          *  utext_copy().  For the text to be writable, the text provider must
-          *  be of a type that supports writing and the UText must not be frozen.
-          *
-          *  Attempting to modify text when utext_isWriteable() is FALSE will fail -
-          *  the text will not be modified, and an error will be returned from the function
-          *  that attempted the modification.
-          *
-          * @param  ut   the UText to be tested.
-          * @return TRUE if the text is modifiable.
-          *
-          * @see    utext_freeze()
-          * @see    utext_replace()
-          * @see    utext_copy()
-          * @stable ICU 3.4
-          *
-          */
+/**
+ *  Return TRUE if the text can be written (modified) with utext_replace() or
+ *  utext_copy().  For the text to be writable, the text provider must
+ *  be of a type that supports writing and the UText must not be frozen.
+ *
+ *  Attempting to modify text when utext_isWriteable() is FALSE will fail -
+ *  the text will not be modified, and an error will be returned from the function
+ *  that attempted the modification.
+ *
+ * @param  ut   the UText to be tested.
+ * @return TRUE if the text is modifiable.
+ *
+ * @see    utext_freeze()
+ * @see    utext_replace()
+ * @see    utext_copy()
+ * @stable ICU 3.4
+ *
+ */
 U_STABLE UBool U_EXPORT2
 utext_isWritable(const UText *ut);
 
-
 /**
-  * Test whether there is meta data associated with the text.
-  * @see Replaceable::hasMetaData()
-  *
-  * @param ut The UText to be tested
-  * @return TRUE if the underlying text includes meta data.
-  * @stable ICU 3.4
-  */
+ * Test whether there is meta data associated with the text.
+ * @see Replaceable::hasMetaData()
+ *
+ * @param ut The UText to be tested
+ * @return TRUE if the underlying text includes meta data.
+ * @stable ICU 3.4
+ */
 U_STABLE UBool U_EXPORT2
 utext_hasMetaData(const UText *ut);
-
 
 /**
  * Replace a range of the original text with a replacement text.
@@ -971,8 +965,6 @@ utext_replace(UText *ut,
     int64_t nativeStart, int64_t nativeLimit,
     const UChar *replacementText, int32_t replacementLength,
     UErrorCode *status);
-
-
 
 /**
  *
@@ -1013,6 +1005,52 @@ utext_copy(UText *ut,
     UBool move,
     UErrorCode *status);
 
+/**
+ *
+ * Truncate an exsting substring allowing re-write over exsting
+ * text.
+ *
+ * The iteration position is moved to the beginning.
+ *
+ * This function is only available on UText types that support writing,
+ * that is, ones where utext_isWritable() returns TRUE.
+ *
+ * When using this function, there should be only a single UText opened onto the
+ * underlying native text string.  Behavior after a copy operation
+ * on a UText is undefined in any other additional UTexts that refer to the
+ * modified string.
+ *
+ * @param ut           The UText representing the text to be operated on.
+ * @param status       receives any error status.  Possible errors include U_NO_WRITE_PERMISSION
+ *
+ * @stable 
+ */
+U_STABLE void U_EXPORT2
+utext_truncate(UText *ut,
+    UErrorCode *status);
+
+/**
+ *
+ * Copy the contents of one UText to antoher.
+ *
+ * This function is only available on UText types that support writing,
+ * that is, ones where utext_isWritable() returns TRUE.
+ *
+ * When using this function, there should be only a single UText opened onto the
+ * underlying native text string.  Behavior after a copy operation
+ * on a UText is undefined in any other additional UTexts that refer to the
+ * modified string.
+ *
+ * @param dst          The UText representing the text to be operated on.
+ * @param src          The UText representing the text to be copied from.
+ * @param status       receives any error status.  Possible errors include U_NO_WRITE_PERMISSION
+ *
+ * @stable
+ */
+U_CAPI int64_t U_EXPORT2
+utext_copyUText(UText *dst,
+    UText *src,
+    UErrorCode *status);
 
 /**
   *  <p>
@@ -1037,7 +1075,6 @@ utext_copy(UText *ut,
   */
 U_STABLE void U_EXPORT2
 utext_freeze(UText *ut);
-
 
 /**
  * UText provider properties (bit field indexes).
@@ -1319,6 +1356,28 @@ UTextMapNativeIndexToUTF16(const UText *ut, int64_t nativeIndex);
 typedef void U_CALLCONV
 UTextClose(UText *ut);
 
+/**
+ * Function type declaration for UText.truncate().
+ *
+ * Truncate an exsting substring allowing re-write over exsting
+ * text.
+ *
+ * This function need only be implemented for UText types that support writing.
+ *
+ * When using this function, there should be only a single UText opened onto the
+ * underlying native text string.  The function is responsible for updating the
+ * text chunk within the UText to reflect the updated iteration position,
+ * taking into account any changes to the underlying string's structure caused
+ * by the replace operation.
+ *
+ * @param ut           The UText representing the text to be operated on.
+ * @param status       receives any error status.  Possible errors include U_NO_WRITE_PERMISSION
+ *
+ * @stable
+ */
+typedef void U_CALLCONV
+UTextTruncate(UText *ut,
+    UErrorCode *status);
 
 /**
   *   (public)  Function dispatch table for UText.
@@ -1425,13 +1484,13 @@ struct UTextFuncs {
       * @see UTextClose
       * @stable ICU 3.6
       */
-    UTextClose  *close;
+    UTextClose *close;
 
     /**
       * (private)  Spare function pointer
       * @internal
       */
-    UTextClose  *spare1;
+    UTextTruncate *truncate;
 
     /**
       * (private)  Spare function pointer
