@@ -131,7 +131,7 @@ action_resolve(UBiDiTransform *pTransform, UErrorCode *pErrorCode)
 {
     pTransform->bidiUt = utext_clone(pTransform->bidiUt, pTransform->dstUt, TRUE, TRUE, pErrorCode);
     if (!U_FAILURE(*pErrorCode))
-        ubidi_setUPara(pTransform->pBidi, pTransform->bidiUt, pTransform->pActiveScheme->baseLevel, NULL, pErrorCode);
+        ubidi_setUPara(pTransform->pBidi, pTransform->bidiUt, pTransform->pActiveScheme->baseLevel, NULL, 0, pErrorCode);
 
     return FALSE;
 }
@@ -243,7 +243,7 @@ doShape(UBiDiTransform *pTransform, uint32_t options, UErrorCode *pErrorCode)
     {
         utext_truncate(pTransform->dstUt, pErrorCode);
 
-        *pTransform->pDestLength = u_shapeUText(&srcUt, pTransform->dstUt, options, pErrorCode);
+        *pTransform->pDestLength = u_shapeUArabic(&srcUt, pTransform->dstUt, options, pErrorCode);
 
         utext_close(&srcUt);
 
@@ -481,7 +481,7 @@ ubiditransform_transformUText(UBiDiTransform *pBiDiTransform,
         }
     }
 
-    dstNativeLength = (int32_t)utext_copyUText(dstUt, srcUt, pErrorCode);
+    dstNativeLength = (int32_t)utext_concat(dstUt, srcUt, pErrorCode);
     if (!U_FAILURE(*pErrorCode))
     {
         // Current limitation: in multiple paragraphs will be resolved according

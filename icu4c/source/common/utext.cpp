@@ -12,9 +12,11 @@
 *   tab size:   8 (not used)
 *   indentation:4
 *
+*   created on: 2005dec04
 *   created:    2005-04-12, Markus W. Scherer
 *
 *   Contributions:
+*   Updated by Matitiahu Allouche
 *   UText enhancements by Paul Werbicki
 */
 
@@ -215,7 +217,8 @@ utext_moveIndex32(UText *ut, int32_t delta)
     if (utext_isValid(ut)) {
         UChar32 c;
         if (delta > 0) {
-            for (; delta > 0; delta--) {
+            for (; delta > 0; delta--)
+            {
                 if (ut->chunkOffset >= ut->chunkLength && !utext_access(ut, ut->chunkNativeLimit, TRUE)) {
                     result = FALSE;
                     break;
@@ -234,7 +237,8 @@ utext_moveIndex32(UText *ut, int32_t delta)
             }
         }
         else if (delta < 0) {
-            for (; delta < 0; delta++) {
+            for (; delta < 0; delta++)
+            {
                 if (ut->chunkOffset <= 0 && !utext_access(ut, ut->chunkNativeStart, FALSE)) {
                     result = FALSE;
                     break;
@@ -612,11 +616,15 @@ utext_truncate(UText *ut,
 }
 
 U_CAPI int64_t U_EXPORT2
-utext_copyUText(UText *dst, 
+utext_concat(UText *dst, 
     UText *src,
     UErrorCode *status)
 {
     if ((status == NULL) || (U_FAILURE(*status))) {
+        return 0;
+    }
+    if ((dst->providerProperties & I32_FLAG(UTEXT_PROVIDER_WRITABLE)) == 0) {
+        *status = U_NO_WRITE_PERMISSION;
         return 0;
     }
     if ((utext_isValid(src)) && (utext_isValid(dst)))
@@ -625,10 +633,15 @@ utext_copyUText(UText *dst,
         int64_t srcNativeLimit = 0;
         int64_t dstNativeLimit = utext_nativeLength(dst);
 
-        for (; (utext_access(src, srcNativeLimit, TRUE)) && (src->chunkLength > 0); )
+        for (; (!U_FAILURE(*status)) && (utext_access(src, srcNativeLimit, TRUE)) && (src->chunkLength > 0); )
         {
-            dstNativeLimit += utext_replace(dst, dstNativeLimit, dstNativeLimit, src->chunkContents, src->chunkLength, status);
-            srcNativeLimit += src->chunkNativeLimit;
+            UTEXT_SETNATIVEINDEX(src, srcNativeLimit);
+
+            dstNativeLimit += utext_replace(dst, dstNativeLimit, dstNativeLimit, 
+                &src->chunkContents[src->chunkOffset], src->chunkLength - src->chunkOffset,
+                status);
+
+            srcNativeLimit = src->chunkNativeLimit;
         }
 
         UTEXT_SETNATIVEINDEX(src, srcNativeIndex);
@@ -820,7 +833,9 @@ utext_setup(UText *ut, int32_t extraSpace, UErrorCode *status)
 // Adjust a pointer that refers to something within one UText (the source)
 // to refer to the same relative offset within a another UText (the target)
 static void U_CALLCONV
-utext_adjustPointer(UText *dest, const void** destPtr, const UText *src)
+utext_adjustPointer(UText *dest,
+    const void** destPtr,
+    const UText *src)
 {
     // Convert all pointers to (char*) so that byte address arithmetic will work.
     char* dptr = (char*)*destPtr;
@@ -842,7 +857,9 @@ utext_adjustPointer(UText *dest, const void** destPtr, const UText *src)
 // This is a generic copy-the-utext-by-value clone function that can be
 // used as-is with some utext types, and as a helper by other clones.
 U_CAPI UText * U_EXPORT2
-utext_shallowClone(UText *dest, const UText *src, UErrorCode* status)
+utext_shallowClone(UText *dest,
+    const UText *src,
+    UErrorCode* status)
 {
     if (U_FAILURE(*status)) {
         return NULL;
@@ -1076,11 +1093,15 @@ u16TextClone(UText *dest, const UText *src,
             // yet been determined the UText could change.
             length64 = src->a;
             if (BC_AS_I64(src) < 0) {
-                for (; (s[length64] != 0); length64++) {
+                for (; (s[length64] != 0); length64++)
+                {
+                    // Do nothing.
                 }
             }
             else {
-                for (; (length64 < BC_AS_I64(src)) && (s[length64] != 0); length64++) {
+                for (; (length64 < BC_AS_I64(src)) && (s[length64] != 0); length64++)
+                {
+                    // Do nothing.
                 }
             }
             length64++;
@@ -1093,17 +1114,22 @@ u16TextClone(UText *dest, const UText *src,
         else {
             int64_t i;
             if (BC_AS_I64(src) < 0) {
-                for (i = 0; (i < length64); i++) {
+                for (i = 0; (i < length64); i++)
+                {
                     copyStr[i] = s[i];
                 }
+                BC_AS_I64(dest) = length64;
             }
             else {
-                for (i = 0; (i < BC_AS_I64(src)) && (i < length64); i++) {
+                for (i = 0; (i < BC_AS_I64(src)) && (i < length64); i++)
+                {
                     copyStr[i] = s[i];
                 }
             }
             dest->context = (void*)copyStr;
             dest->providerProperties |= I32_FLAG(UTEXT_PROVIDER_OWNS_TEXT);
+            dest->providerProperties |= I32_FLAG(UTEXT_PROVIDER_WRITABLE);
+            dest->chunkContents = &(copyStr[dest->chunkNativeStart]);
         }
     }
     return dest;
@@ -1120,11 +1146,15 @@ u16TextNativeLength(UText *ut)
         const UChar* s = (const UChar*)ut->context;
         int64_t length64 = ut->a;
         if (BC_AS_I64(ut) < 0) {
-            for (; (s[length64] != 0); length64++) {
+            for (; (s[length64] != 0); length64++)
+            {
+                // Do nothing.
             }
         }
         else {
-            for (; (length64 < BC_AS_I64(ut)) && (s[length64] != 0); length64++) {
+            for (; (length64 < BC_AS_I64(ut)) && (s[length64] != 0); length64++)
+            {
+                // Do nothing.
             }
         }
         ut->a = length64;
@@ -1155,11 +1185,15 @@ u16ScanLength(UText *ut, int64_t nativeLimit)
 
             int64_t chunkLimit64 = (int32_t)ut->a;
             if (BC_AS_I64(ut) < 0) {
-                for (; (s[chunkLimit64] != 0) && (chunkLimit64 < scanLimit64); chunkLimit64++) {
+                for (; (s[chunkLimit64] != 0) && (chunkLimit64 < scanLimit64); chunkLimit64++)
+                {
+                    // Do nothing.
                 }
             }
             else {
-                for (; (chunkLimit64 < BC_AS_I64(ut)) && (s[chunkLimit64] != 0) && (chunkLimit64 < scanLimit64); chunkLimit64++) {
+                for (; (chunkLimit64 < BC_AS_I64(ut)) && (s[chunkLimit64] != 0) && (chunkLimit64 < scanLimit64); chunkLimit64++)
+                {
+                    // Do nothing.
                 }
             }
             ut->a = chunkLimit64;
@@ -1307,7 +1341,8 @@ u16TextExtract(UText *ut,
     // INT32_MAX.
     int64_t si;
     int32_t di;
-    for (si = nativeStart64, di = 0; (si < nativeLimit64) && (di >= 0); si++, di++) {
+    for (si = nativeStart64, di = 0; (si < nativeLimit64) && (di >= 0); si++, di++)
+    {
         if (di < destCapacity) { // Only store if there is space.
             dest[di] = s[si];
         }
@@ -1390,16 +1425,24 @@ u16TextReplace(UText *ut,
     if (nativeLimit64 - nativeStart64 < replacementLength) {
         int64_t i;
         for (i = length64 + diff64 - 1; (i >= nativeStart64 + replacementLength); i--)
+        {
             s[i] = s[i - diff64];
+        }
         for (; (i >= nativeStart64); i--)
+        {
             s[i] = replacementText[i - nativeStart64];
+        }
     }
     else {
         int64_t i;
         for (i = (int64_t)nativeStart64; (i < nativeStart64 + replacementLength); i++)
+        {
             s[i] = replacementText[i - nativeStart64];
+        }
         for (; (i < length64); i++)
+        {
             s[i] = s[i - diff64];
+        }
     }
 
     if ((replacementLength > 0) || (nativeLimit64 - nativeStart64 > 0)) {
@@ -1461,19 +1504,25 @@ u16TextCopy(UText *ut,
     if (move) {
         if (nativeStart64 < nativeDest64) {
             int64_t i, j;
-            for (i = nativeStart64; (i < nativeLimit64); i++) {
+            for (i = nativeStart64; (i < nativeLimit64); i++)
+            {
                 UChar u16char = s[nativeStart64];
                 for (j = nativeStart64; (j < nativeDest64 - 1); j++)
+                {
                     s[j] = s[j + 1];
+                }
                 s[j] = u16char;
             }
         }
         else if (nativeStart64 > nativeDest64) {
             int64_t i, j;
-            for (i = nativeLimit64 - 1; (i >= nativeStart64); i--) {
+            for (i = nativeLimit64 - 1; (i >= nativeStart64); i--)
+            {
                 UChar u16char = s[nativeLimit64 - 1];
                 for (j = nativeLimit64 - 1; (j > nativeDest64); j--)
+                {
                     s[j] = s[j - 1];
+                }
                 s[j] = u16char;
             }
         }
@@ -1482,9 +1531,13 @@ u16TextCopy(UText *ut,
         int64_t offset32 = nativeStart64 + (nativeStart64 > nativeDest64 ? diff64 : 0) - nativeDest64;
         int64_t i;
         for (i = length64 + diff64 - 1; (i >= nativeDest64 + diff64); i--)
+        {
             s[i] = s[i - diff64];
+        }
         for (; (i >= nativeDest64); i--)
+        {
             s[i] = s[offset32 + i];
+        }
 
         if (diff64) {
             ut->a += diff64;
@@ -1608,7 +1661,9 @@ utext_openU16(UText *ut,
     // time now to figure it out.
     if (length < 0) {
         length = 0;
-        for (; (length < capacity) && (s[length] != 0); length++) {
+        for (; (length < capacity) && (s[length] != 0); length++)
+        {
+            // Do nothing.
         }
     }
 
@@ -1701,11 +1756,15 @@ u8TextClone(UText *dest, const UText *src,
             // yet been determined the UText could change.
             length64 = src->a;
             if (BC_AS_I64(src) < 0) {
-                for (; (s[length64] != 0); length64++) {
+                for (; (s[length64] != 0); length64++)
+                {
+                    // Do nothing.
                 }
             }
             else {
-                for (; (length64 < BC_AS_I64(src)) && (s[length64] != 0); length64++) {
+                for (; (length64 < BC_AS_I64(src)) && (s[length64] != 0); length64++)
+                {
+                    // Do nothing.
                 }
             }
             length64++;
@@ -1718,17 +1777,21 @@ u8TextClone(UText *dest, const UText *src,
         else {
             int64_t i;
             if (BC_AS_I64(src) < 0) {
-                for (i = 0; (i < length64); i++) {
+                for (i = 0; (i < length64); i++)
+                {
                     copyStr[i] = s[i];
                 }
+                BC_AS_I64(dest) = length64;
             }
             else {
-                for (i = 0; (i < BC_AS_I64(src)) && (i < length64); i++) {
+                for (i = 0; (i < BC_AS_I64(src)) && (i < length64); i++)
+                {
                     copyStr[i] = s[i];
                 }
             }
             dest->context = (void*)copyStr;
             dest->providerProperties |= I32_FLAG(UTEXT_PROVIDER_OWNS_TEXT);
+            dest->providerProperties |= I32_FLAG(UTEXT_PROVIDER_WRITABLE);
         }
     }
     return dest;
@@ -1745,11 +1808,15 @@ u8TextNativeLength(UText *ut)
         const uint8_t* s = (const uint8_t*)ut->context;
         int64_t length64 = ut->a;
         if (BC_AS_I64(ut) < 0) {
-            for (; (s[length64] != 0); length64++) {
+            for (; (s[length64] != 0); length64++)
+            {
+                // Do nothing.
             }
         }
         else {
-            for (; (length64 < BC_AS_I64(ut)) && (s[length64] != 0); length64++) {
+            for (; (length64 < BC_AS_I64(ut)) && (s[length64] != 0); length64++)
+            {
+                // Do nothing.
             }
         }
         ut->a = length64;
@@ -1803,11 +1870,15 @@ u8ScanLength(UText *ut, int64_t nativeLimit)
 
             int64_t chunkLimit64 = (int32_t)ut->a;
             if (BC_AS_I64(ut) < 0) {
-                for (; (s[chunkLimit64] != 0) && (chunkLimit64 < scanLimit64); chunkLimit64++) {
+                for (; (s[chunkLimit64] != 0) && (chunkLimit64 < scanLimit64); chunkLimit64++)
+                {
+                    // Do nothing.
                 }
             }
             else {
-                for (; (chunkLimit64 < BC_AS_I64(ut)) && (s[chunkLimit64] != 0) && (chunkLimit64 < scanLimit64); chunkLimit64++) {
+                for (; (chunkLimit64 < BC_AS_I64(ut)) && (s[chunkLimit64] != 0) && (chunkLimit64 < scanLimit64); chunkLimit64++)
+                {
+                    // Do nothing.
                 }
             }
             ut->a = chunkLimit64;
@@ -1927,7 +1998,8 @@ u8TextAccess(UText *ut,
             int64_t si;
             int32_t di;
             UChar32 uchar;
-            for (si = chunkNativeStart64, di = 0; si < chunkNativeLimit64; ) {
+            for (si = chunkNativeStart64, di = 0; si < chunkNativeLimit64; )
+            {
                 uchar = s[si];
                 if (U8_IS_SINGLE(uchar)) {
                     if (di < U8_TEXT_CHUNK_SIZE + U8_CHUCK_TOLERANCE * 2) {
@@ -1979,10 +2051,12 @@ u8TextAccess(UText *ut,
                     //U16_APPEND_UNSAFE(alternateBuffer->chunkContents, di, uchar);
 
                     int64_t i;
-                    for (i = savedDi; (di < U8_TEXT_CHUNK_SIZE + U8_CHUCK_TOLERANCE * 2) && (i < di); i++) {
+                    for (i = savedDi; (di < U8_TEXT_CHUNK_SIZE + U8_CHUCK_TOLERANCE * 2) && (i < di); i++)
+                    {
                         alternateBuffer->chunkU16ToNative[i] = (int8_t)((savedSi - chunkNativeStart64) - i);
                     }
-                    for (i = savedSi; i < si; i++) {
+                    for (i = savedSi; i < si; i++)
+                    {
                         alternateBuffer->chunkNativeToU16[i - chunkNativeStart64] = (int8_t)(savedDi - (i - chunkNativeStart64));
                     }
                 }
@@ -2061,7 +2135,8 @@ u8TextExtract(UText *ut,
     int64_t si;
     int32_t di;
     UChar32 uchar;
-    for (si = nativeStart64, di = 0; (si < nativeLimit64) && (di >= 0); ) {
+    for (si = nativeStart64, di = 0; (si < nativeLimit64) && (di >= 0); )
+    {
         uchar = s[si];
         if (U8_IS_SINGLE(uchar)) {
             if (di < destCapacity) {
@@ -2177,7 +2252,8 @@ u8TextReplace(UText *ut,
     if (replacementLength > 0) {
         int64_t i;
         UChar32 uchar;
-        for (i = 0; i < replacementLength; ) {
+        for (i = 0; i < replacementLength; )
+        {
             U16_NEXT_UNSAFE(replacementText, i, uchar);
             nativeReplLength64 += U8_LENGTH(uchar);
         }
@@ -2205,8 +2281,11 @@ u8TextReplace(UText *ut,
 
     if (nativeLimit64 - nativeStart64 < nativeReplLength64) {
         for (si = length64 + diff64 - 1; (si >= nativeStart64 + nativeReplLength64); si--)
+        {
             s[si] = s[si - diff64];
-        for (di = replacementLength; (di > 0) && (si >= nativeStart64); si--) {
+        }
+        for (di = replacementLength; (di > 0) && (si >= nativeStart64); si--)
+        {
             U16_PREV(replacementText, 0, di, uchar);
             length8 = U8_LENGTH(uchar);
             if (length8 > 1) {
@@ -2231,7 +2310,8 @@ u8TextReplace(UText *ut,
         }
     }
     else {
-        for (si = (int64_t)nativeStart64, di = 0; (di < replacementLength) && (si < nativeStart64 + nativeReplLength64); si++) {
+        for (si = (int64_t)nativeStart64, di = 0; (di < replacementLength) && (si < nativeStart64 + nativeReplLength64); si++)
+        {
             U16_NEXT(replacementText, di, ut->a, uchar);
             length8 = U8_LENGTH(uchar);
             if (length8 > 1) {
@@ -2252,7 +2332,9 @@ u8TextReplace(UText *ut,
             }
         }
         for (; (si < length64); si++)
+        {
             s[si] = s[si - diff64];
+        }
     }
 
     if ((nativeReplLength64 > 0) || (nativeLimit64 - nativeStart64 > 0)) {
@@ -2313,19 +2395,25 @@ u8TextCopy(UText *ut,
     if (move) {
         if (nativeStart64 < nativeDest64) {
             int64_t i, j;
-            for (i = nativeStart64; (i < nativeLimit64); i++) {
+            for (i = nativeStart64; (i < nativeLimit64); i++)
+            {
                 uint8_t u8char = s[nativeStart64];
                 for (j = nativeStart64; (j < nativeDest64 - 1); j++)
+                {
                     s[j] = s[j + 1];
+                }
                 s[j] = u8char;
             }
         }
         else if (nativeStart64 > nativeDest64) {
             int64_t i, j;
-            for (i = nativeLimit64 - 1; (i >= nativeStart64); i--) {
+            for (i = nativeLimit64 - 1; (i >= nativeStart64); i--)
+            {
                 uint8_t u8char = s[nativeLimit64 - 1];
                 for (j = nativeLimit64 - 1; (j > nativeDest64); j--)
+                {
                     s[j] = s[j - 1];
+                }
                 s[j] = u8char;
             }
         }
@@ -2334,9 +2422,13 @@ u8TextCopy(UText *ut,
         int64_t offset32 = nativeStart64 + (nativeStart64 > nativeDest64 ? diff64 : 0) - nativeDest64;
         int64_t i;
         for (i = length64 + diff64 - 1; (i >= nativeDest64 + diff64); i--)
+        {
             s[i] = s[i - diff64];
+        }
         for (; (i >= nativeDest64); i--)
+        {
             s[i] = s[offset32 + i];
+        }
 
         if (diff64) {
             ut->a += diff64;
@@ -2478,7 +2570,9 @@ utext_openU8(UText *ut,
     // time now to figure it out.
     if (length < 0) {
         length = 0;
-        for (; (length < capacity) && (s[length] != 0); length++) {
+        for (; (length < capacity) && (s[length] != 0); length++)
+        {
+            // Do nothing.
         }
     }
 
@@ -2571,11 +2665,15 @@ u32TextClone(UText *dest, const UText *src,
             // yet been determined the UText could change.
             length64 = src->a;
             if (BC_AS_I64(src) < 0) {
-                for (; (s[length64] != 0); length64++) {
+                for (; (s[length64] != 0); length64++)
+                {
+                    // Do nothing.
                 }
             }
             else {
-                for (; (length64 < BC_AS_I64(src)) && (s[length64] != 0); length64++) {
+                for (; (length64 < BC_AS_I64(src)) && (s[length64] != 0); length64++)
+                {
+                    // Do nothing.
                 }
             }
             length64++;
@@ -2588,17 +2686,21 @@ u32TextClone(UText *dest, const UText *src,
         else {
             int64_t i;
             if (BC_AS_I64(src) < 0) {
-                for (i = 0; (i < length64); i++) {
+                for (i = 0; (i < length64); i++)
+                {
                     copyStr[i] = s[i];
                 }
+                BC_AS_I64(dest) = length64;
             }
             else {
-                for (i = 0; (i < BC_AS_I64(src)) && (i < length64); i++) {
+                for (i = 0; (i < BC_AS_I64(src)) && (i < length64); i++)
+                {
                     copyStr[i] = s[i];
                 }
             }
             dest->context = (void*)copyStr;
             dest->providerProperties |= I32_FLAG(UTEXT_PROVIDER_OWNS_TEXT);
+            dest->providerProperties |= I32_FLAG(UTEXT_PROVIDER_WRITABLE);
         }
     }
     return dest;
@@ -2615,11 +2717,15 @@ u32TextNativeLength(UText *ut)
         const UChar32* s = (const UChar32*)ut->context;
         int64_t length64 = ut->a;
         if (BC_AS_I64(ut) < 0) {
-            for (; (s[length64] != 0); length64++) {
+            for (; (s[length64] != 0); length64++)
+            {
+                // Do nothing.
             }
         }
         else {
-            for (; (length64 < BC_AS_I64(ut)) && (s[length64] != 0); length64++) {
+            for (; (length64 < BC_AS_I64(ut)) && (s[length64] != 0); length64++)
+            {
+                // Do nothing.
             }
         }
         ut->a = length64;
@@ -2650,11 +2756,15 @@ u32ScanLength(UText *ut, int64_t nativeLimit)
 
             int64_t chunkLimit64 = (int32_t)ut->a;
             if (BC_AS_I64(ut) < 0) {
-                for (; (s[chunkLimit64] != 0) && (chunkLimit64 < scanLimit64); chunkLimit64++) {
+                for (; (s[chunkLimit64] != 0) && (chunkLimit64 < scanLimit64); chunkLimit64++)
+                {
+                    // Do nothing.
                 }
             }
             else {
-                for (; (chunkLimit64 < BC_AS_I64(ut)) && (s[chunkLimit64] != 0) && (chunkLimit64 < scanLimit64); chunkLimit64++) {
+                for (; (chunkLimit64 < BC_AS_I64(ut)) && (s[chunkLimit64] != 0) && (chunkLimit64 < scanLimit64); chunkLimit64++)
+                {
+                    // Do nothing.
                 }
             }
             ut->a = chunkLimit64;
@@ -2748,7 +2858,8 @@ u32TextAccess(UText *ut,
             int64_t si;
             int32_t di;
             UChar32 uchar;
-            for (si = chunkNativeStart64, di = 0; si < chunkNativeLimit64; ) {
+            for (si = chunkNativeStart64, di = 0; si < chunkNativeLimit64; )
+            {
                 uchar = s[si];
                 if (U_IS_BMP(uchar)) {
                     if (di < U32_TEXT_CHUNK_SIZE * U16_MAX_LENGTH + U32_CHUCK_TOLERANCE * 2) {
@@ -2775,7 +2886,8 @@ u32TextAccess(UText *ut,
                     di++;
 
                     int64_t i;
-                    for (i = savedDi; (di < U32_TEXT_CHUNK_SIZE * U16_MAX_LENGTH + U32_CHUCK_TOLERANCE * 2) && (i < di); i++) {
+                    for (i = savedDi; (di < U32_TEXT_CHUNK_SIZE * U16_MAX_LENGTH + U32_CHUCK_TOLERANCE * 2) && (i < di); i++)
+                    {
                         alternateBuffer->chunkU16ToNative[i] = (int8_t)((si - chunkNativeStart64) - i);
                     }
                     alternateBuffer->chunkNativeToU16[si - chunkNativeStart64] = (int8_t)(savedDi - (si - chunkNativeStart64));
@@ -2855,7 +2967,8 @@ u32TextExtract(UText *ut,
     int64_t si;
     int32_t di;
     UChar32 uchar;
-    for (si = nativeStart64, di = 0; (si < nativeLimit64) && (di >= 0); ) {
+    for (si = nativeStart64, di = 0; (si < nativeLimit64) && (di >= 0); )
+    {
         uchar = s[si++];
         if (U_IS_BMP(uchar)) {
             if (di < destCapacity) {
@@ -2936,7 +3049,8 @@ u32TextReplace(UText *ut,
     if (replacementLength > 0) {
         int64_t i;
         UChar32 uchar;
-        for (i = 0; i < replacementLength; ) {
+        for (i = 0; i < replacementLength; )
+        {
             U16_NEXT_UNSAFE(replacementText, i, uchar);
             nativeReplLength64++;
         }
@@ -2961,8 +3075,11 @@ u32TextReplace(UText *ut,
         int32_t di;
         UChar32 uchar;
         for (si = length64 + diff64 - 1; (si >= nativeStart64 + nativeReplLength64); si--)
+        {
             s[si] = s[si - diff64];
-        for (di = replacementLength; (di > 0) && (si >= nativeStart64); si--) {
+        }
+        for (di = replacementLength; (di > 0) && (si >= nativeStart64); si--)
+        {
             U16_PREV(replacementText, 0, di, uchar);
             s[si] = uchar;
         }
@@ -2971,12 +3088,15 @@ u32TextReplace(UText *ut,
         int64_t si;
         int32_t di;
         UChar32 uchar;
-        for (si = (int64_t)nativeStart64, di = 0; (di < replacementLength) && (si < nativeStart64 + nativeReplLength64); si++) {
+        for (si = (int64_t)nativeStart64, di = 0; (di < replacementLength) && (si < nativeStart64 + nativeReplLength64); si++)
+        {
             U16_NEXT(replacementText, di, replacementLength, uchar);
             s[si] = uchar;
         }
         for (; (si < length64); si++)
+        {
             s[si] = s[si - diff64];
+        }
     }
 
     if ((nativeReplLength64 > 0) || (nativeLimit64 - nativeStart64 > 0)) {
@@ -3037,19 +3157,25 @@ u32TextCopy(UText *ut,
     if (move) {
         if (nativeStart64 < nativeDest64) {
             int64_t i, j;
-            for (i = nativeStart64; (i < nativeLimit64); i++) {
+            for (i = nativeStart64; (i < nativeLimit64); i++)
+            {
                 UChar32 u32char = s[nativeStart64];
                 for (j = nativeStart64; (j < nativeDest64 - 1); j++)
+                {
                     s[j] = s[j + 1];
+                }
                 s[j] = u32char;
             }
         }
         else if (nativeStart64 > nativeDest64) {
             int64_t i, j;
-            for (i = nativeLimit64 - 1; (i >= nativeStart64); i--) {
+            for (i = nativeLimit64 - 1; (i >= nativeStart64); i--)
+            {
                 UChar32 u32char = s[nativeLimit64 - 1];
                 for (j = nativeLimit64 - 1; (j > nativeDest64); j--)
+                {
                     s[j] = s[j - 1];
+                }
                 s[j] = u32char;
             }
         }
@@ -3058,9 +3184,13 @@ u32TextCopy(UText *ut,
         int64_t offset32 = nativeStart64 + (nativeStart64 > nativeDest64 ? diff64 : 0) - nativeDest64;
         int64_t i;
         for (i = length64 + diff64 - 1; (i >= nativeDest64 + diff64); i--)
+        {
             s[i] = s[i - diff64];
+        }
         for (; (i >= nativeDest64); i--)
+        {
             s[i] = s[offset32 + i];
+        }
 
         if (diff64) {
             ut->a += diff64;
@@ -3204,7 +3334,9 @@ utext_openU32(UText *ut,
     // time now to figure it out.
     if (length < 0) {
         length = 0;
-        for (; (length < capacity) && (s[length] != 0); length++) {
+        for (; (length < capacity) && (s[length] != 0); length++)
+        {
+            // Do nothing.
         }
     }
 
@@ -3232,7 +3364,11 @@ utext_openU32(UText *ut,
 U_CDECL_BEGIN
 
 static UText * U_CALLCONV
-unistrTextClone(UText *dest, const UText *src, UBool deep, UErrorCode *status) {
+unistrTextClone(UText *dest,
+    const UText *src,
+    UBool deep,
+    UErrorCode *status)
+{
     // First do a generic shallow clone.  Does everything needed for the UText struct itself.
     dest = utext_shallowClone(dest, src, status);
 
@@ -3242,8 +3378,8 @@ unistrTextClone(UText *dest, const UText *src, UBool deep, UErrorCode *status) {
     //    the UText.
     //
     if (deep && U_SUCCESS(*status)) {
-        const UnicodeString *srcString = (const UnicodeString *)src->context;
-        dest->context = new UnicodeString(*srcString);
+        const UnicodeString *uString = (const UnicodeString *)src->context;
+        dest->context = new UnicodeString(*uString);
         dest->providerProperties |= I32_FLAG(UTEXT_PROVIDER_OWNS_TEXT);
 
         // with deep clone, the copy is writable, even when the source is not.
@@ -3252,25 +3388,17 @@ unistrTextClone(UText *dest, const UText *src, UBool deep, UErrorCode *status) {
     return dest;
 }
 
-static void U_CALLCONV
-unistrTextClose(UText *ut) {
-    // Most of the work of close is done by the generic UText framework close.
-    // All that needs to be done here is delete the UnicodeString if the UText
-    //  owns it.  This occurs if the UText was created by cloning.
-    if (ut->providerProperties & I32_FLAG(UTEXT_PROVIDER_OWNS_TEXT)) {
-        UnicodeString *str = (UnicodeString *)ut->context;
-        delete str;
-        ut->context = NULL;
-    }
-}
-
 static int64_t U_CALLCONV
-unistrTextLength(UText *t) {
-    return ((const UnicodeString *)t->context)->length();
+unistrTextLength(UText *ut)
+{
+    const UnicodeString *uString = (const UnicodeString *)ut->context;
+    return uString->length();
 }
 
 static UBool U_CALLCONV
-unistrTextAccess(UText *ut, int64_t index, UBool  forward) {
+unistrTextAccess(UText *ut,
+    int64_t index, UBool forward)
+{
     int32_t length = ut->chunkLength;
     ut->chunkOffset = utext_pinIndex32(index, length);
 
@@ -3280,12 +3408,13 @@ unistrTextAccess(UText *ut, int64_t index, UBool  forward) {
 }
 
 static int32_t U_CALLCONV
-unistrTextExtract(UText *t,
+unistrTextExtract(UText *ut,
     int64_t start, int64_t limit,
     UChar *dest, int32_t destCapacity,
-    UErrorCode *pErrorCode) {
-    const UnicodeString *us = (const UnicodeString *)t->context;
-    int32_t length = us->length();
+    UErrorCode *pErrorCode)
+{
+    const UnicodeString *uString = (const UnicodeString *)ut->context;
+    int32_t length = uString->length();
 
     if (U_FAILURE(*pErrorCode)) {
         return 0;
@@ -3298,8 +3427,8 @@ unistrTextExtract(UText *t,
         return 0;
     }
 
-    int32_t start32 = start < length ? us->getChar32Start((int32_t)start) : length;
-    int32_t limit32 = limit < length ? us->getChar32Start((int32_t)limit) : length;
+    int32_t start32 = start < length ? uString->getChar32Start((int32_t)start) : length;
+    int32_t limit32 = limit < length ? uString->getChar32Start((int32_t)limit) : length;
 
     length = limit32 - start32;
     if (destCapacity > 0 && dest != NULL) {
@@ -3307,11 +3436,11 @@ unistrTextExtract(UText *t,
         if (trimmedLength > destCapacity) {
             trimmedLength = destCapacity;
         }
-        us->extract(start32, trimmedLength, dest);
-        t->chunkOffset = start32 + trimmedLength;
+        uString->extract(start32, trimmedLength, dest);
+        ut->chunkOffset = start32 + trimmedLength;
     }
     else {
-        t->chunkOffset = start32;
+        ut->chunkOffset = start32;
     }
     u_terminateUChars(dest, destCapacity, length, pErrorCode);
     return length;
@@ -3321,8 +3450,9 @@ static int32_t U_CALLCONV
 unistrTextReplace(UText *ut,
     int64_t start, int64_t limit,
     const UChar *src, int32_t length,
-    UErrorCode *pErrorCode) {
-    UnicodeString *us = (UnicodeString *)ut->context;
+    UErrorCode *pErrorCode)
+{
+    UnicodeString *uString = (UnicodeString *)ut->context;
     int32_t oldLength;
 
     if (U_FAILURE(*pErrorCode)) {
@@ -3335,22 +3465,22 @@ unistrTextReplace(UText *ut,
         *pErrorCode = U_INDEX_OUTOFBOUNDS_ERROR;
         return 0;
     }
-    oldLength = us->length();
+    oldLength = uString->length();
     int32_t start32 = utext_pinIndex32(start, oldLength);
     int32_t limit32 = utext_pinIndex32(limit, oldLength);
     if (start32 < oldLength) {
-        start32 = us->getChar32Start(start32);
+        start32 = uString->getChar32Start(start32);
     }
     if (limit32 < oldLength) {
-        limit32 = us->getChar32Start(limit32);
+        limit32 = uString->getChar32Start(limit32);
     }
 
     // replace
-    us->replace(start32, limit32 - start32, src, length);
-    int32_t newLength = us->length();
+    uString->replace(start32, limit32 - start32, src, length);
+    int32_t newLength = uString->length();
 
     // Update the chunk description.
-    ut->chunkContents = us->getBuffer();
+    ut->chunkContents = uString->getBuffer();
     ut->chunkLength = newLength;
     ut->chunkNativeLimit = newLength;
     ut->nativeIndexingLimit = newLength;
@@ -3367,9 +3497,10 @@ unistrTextCopy(UText *ut,
     int64_t start, int64_t limit,
     int64_t destIndex,
     UBool move,
-    UErrorCode *pErrorCode) {
-    UnicodeString *us = (UnicodeString *)ut->context;
-    int32_t length = us->length();
+    UErrorCode *pErrorCode)
+{
+    UnicodeString *uString = (UnicodeString *)ut->context;
+    int32_t length = uString->length();
 
     if (U_FAILURE(*pErrorCode)) {
         return;
@@ -3386,19 +3517,19 @@ unistrTextCopy(UText *ut,
     if (move) {
         // move: copy to destIndex, then remove original
         int32_t segLength = limit32 - start32;
-        us->copy(start32, limit32, destIndex32);
+        uString->copy(start32, limit32, destIndex32);
         if (destIndex32 < start32) {
             start32 += segLength;
         }
-        us->remove(start32, segLength);
+        uString->remove(start32, segLength);
     }
     else {
         // copy
-        us->copy(start32, limit32, destIndex32);
+        uString->copy(start32, limit32, destIndex32);
     }
 
     // update chunk description, set iteration position.
-    ut->chunkContents = us->getBuffer();
+    ut->chunkContents = uString->getBuffer();
     if (move == FALSE) {
         // copy operation, string length grows
         ut->chunkLength += limit32 - start32;
@@ -3414,6 +3545,34 @@ unistrTextCopy(UText *ut,
 
 }
 
+static void U_CALLCONV
+unistrTextTruncate(UText *ut,
+    UErrorCode* pErrorCode)
+{
+    if (U_FAILURE(*pErrorCode)) {
+        return;
+    }
+
+    UnicodeString *uString = (UnicodeString *)ut->context;
+    uString->truncate(0);
+
+    utext_invalidateAccess(ut);
+    unistrTextAccess(ut, 0, TRUE);
+}
+
+static void U_CALLCONV
+unistrTextClose(UText *ut)
+{
+    // Most of the work of close is done by the generic UText framework close.
+    // All that needs to be done here is delete the UnicodeString if the UText
+    //  owns it.  This occurs if the UText was created by cloning.
+    if (ut->providerProperties & I32_FLAG(UTEXT_PROVIDER_OWNS_TEXT)) {
+        UnicodeString *uString = (UnicodeString *)ut->context;
+        delete uString;
+        ut->context = NULL;
+    }
+}
+
 static const struct UTextFuncs unistrFuncs =
 {
     sizeof(UTextFuncs),
@@ -3427,15 +3586,18 @@ static const struct UTextFuncs unistrFuncs =
     NULL,                // MapOffsetToNative,
     NULL,                // MapIndexToUTF16,
     unistrTextClose,
-    NULL,                // spare 1
-    NULL,                // spare 2
-    NULL                 // spare 3
+    unistrTextTruncate,
+    NULL,
+    NULL
 };
 
 U_CDECL_END
 
 U_CAPI UText * U_EXPORT2
-utext_openUnicodeString(UText *ut, UnicodeString *s, UErrorCode *status) {
+utext_openUnicodeString(UText *ut,
+    UnicodeString *s,
+    UErrorCode *status)
+{
     ut = utext_openConstUnicodeString(ut, s, status);
     if (U_SUCCESS(*status)) {
         ut->providerProperties |= I32_FLAG(UTEXT_PROVIDER_WRITABLE);
@@ -3444,7 +3606,10 @@ utext_openUnicodeString(UText *ut, UnicodeString *s, UErrorCode *status) {
 }
 
 U_CAPI UText * U_EXPORT2
-utext_openConstUnicodeString(UText *ut, const UnicodeString *s, UErrorCode *status) {
+utext_openConstUnicodeString(UText *ut,
+    const UnicodeString *s,
+    UErrorCode *status)
+{
     if (U_SUCCESS(*status) && s->isBogus()) {
         // The UnicodeString is bogus, but we still need to detach the UText
         //   from whatever it was hooked to before, if anything.
@@ -3489,23 +3654,47 @@ utext_openConstUnicodeString(UText *ut, const UnicodeString *s, UErrorCode *stat
 
 U_CDECL_BEGIN
 
-static void U_CALLCONV
-charIterTextClose(UText *ut) {
-    // Most of the work of close is done by the generic UText framework close.
-    // All that needs to be done here is delete the CharacterIterator if the UText
-    //  owns it.  This occurs if the UText was created by cloning.
-    CharacterIterator *ci = (CharacterIterator *)ut->r;
-    delete ci;
-    ut->r = NULL;
+static UText * U_CALLCONV
+charIterTextClone(UText *dest,
+    const UText *src,
+    UBool deep,
+    UErrorCode * status)
+{
+    if (U_FAILURE(*status)) {
+        return NULL;
+    }
+
+    if (deep) {
+        // There is no CharacterIterator API for cloning the underlying text storage.
+        *status = U_UNSUPPORTED_ERROR;
+        return NULL;
+    }
+    else {
+        CharacterIterator *srcCI = (CharacterIterator *)src->context;
+        srcCI = srcCI->clone();
+        dest = utext_openCharacterIterator(dest, srcCI, status);
+        if (U_FAILURE(*status)) {
+            return dest;
+        }
+        // cast off const on getNativeIndex.
+        //   For CharacterIterator based UTexts, this is safe, the operation is const.
+        int64_t  ix = utext_getNativeIndex((UText *)src);
+        utext_setNativeIndex(dest, ix);
+        dest->r = srcCI;    // flags that this UText owns the CharacterIterator
+    }
+    return dest;
 }
 
 static int64_t U_CALLCONV
-charIterTextLength(UText *ut) {
+charIterTextLength(UText *ut)
+{
     return (int32_t)ut->a;
 }
 
 static UBool U_CALLCONV
-charIterTextAccess(UText *ut, int64_t index, UBool  forward) {
+charIterTextAccess(UText *ut,
+    int64_t index, UBool  forward)
+{
     CharacterIterator *ci = (CharacterIterator *)ut->context;
 
     int32_t clippedIndex = (int32_t)index;
@@ -3552,7 +3741,8 @@ charIterTextAccess(UText *ut, int64_t index, UBool  forward) {
             buf = (UChar *)ut->q;
         }
         ci->setIndex(neededIndex);
-        for (i = 0; i < CIBufSize; i++) {
+        for (i = 0; i < CIBufSize; i++)
+        {
             buf[i] = ci->nextPostInc();
             if (i + neededIndex > ut->a) {
                 break;
@@ -3577,33 +3767,6 @@ charIterTextAccess(UText *ut, int64_t index, UBool  forward) {
     ut->chunkOffset = clippedIndex - (int32_t)ut->chunkNativeStart;
     UBool success = (forward ? ut->chunkOffset < ut->chunkLength : ut->chunkOffset>0);
     return success;
-}
-
-static UText * U_CALLCONV
-charIterTextClone(UText *dest, const UText *src, UBool deep, UErrorCode * status) {
-    if (U_FAILURE(*status)) {
-        return NULL;
-    }
-
-    if (deep) {
-        // There is no CharacterIterator API for cloning the underlying text storage.
-        *status = U_UNSUPPORTED_ERROR;
-        return NULL;
-    }
-    else {
-        CharacterIterator *srcCI = (CharacterIterator *)src->context;
-        srcCI = srcCI->clone();
-        dest = utext_openCharacterIterator(dest, srcCI, status);
-        if (U_FAILURE(*status)) {
-            return dest;
-        }
-        // cast off const on getNativeIndex.
-        //   For CharacterIterator based UTexts, this is safe, the operation is const.
-        int64_t  ix = utext_getNativeIndex((UText *)src);
-        utext_setNativeIndex(dest, ix);
-        dest->r = srcCI;    // flags that this UText owns the CharacterIterator
-    }
-    return dest;
 }
 
 static int32_t U_CALLCONV
@@ -3651,6 +3814,17 @@ charIterTextExtract(UText *ut,
     return desti;
 }
 
+static void U_CALLCONV
+charIterTextClose(UText *ut)
+{
+    // Most of the work of close is done by the generic UText framework close.
+    // All that needs to be done here is delete the CharacterIterator if the UText
+    //  owns it.  This occurs if the UText was created by cloning.
+    CharacterIterator *ci = (CharacterIterator *)ut->r;
+    delete ci;
+    ut->r = NULL;
+}
+
 static const struct UTextFuncs charIterFuncs =
 {
     sizeof(UTextFuncs),
@@ -3664,15 +3838,18 @@ static const struct UTextFuncs charIterFuncs =
     NULL,                // MapOffsetToNative,
     NULL,                // MapIndexToUTF16,
     charIterTextClose,
-    NULL,                // spare 1
-    NULL,                // spare 2
-    NULL                 // spare 3
+    NULL,                // Truncate
+    NULL,
+    NULL
 };
 
 U_CDECL_END
 
 U_CAPI UText * U_EXPORT2
-utext_openCharacterIterator(UText *ut, CharacterIterator *ci, UErrorCode *status) {
+utext_openCharacterIterator(UText *ut,
+    CharacterIterator *ci,
+    UErrorCode *status)
+{
     if (U_FAILURE(*status)) {
         return NULL;
     }
@@ -3737,7 +3914,11 @@ struct ReplExtra {
 U_CDECL_BEGIN
 
 static UText * U_CALLCONV
-repTextClone(UText *dest, const UText *src, UBool deep, UErrorCode *status) {
+repTextClone(UText *dest,
+    const UText *src,
+    UBool deep,
+    UErrorCode *status)
+{
     // First do a generic shallow clone.  Does everything needed for the UText struct itself.
     dest = utext_shallowClone(dest, src, status);
 
@@ -3757,34 +3938,24 @@ repTextClone(UText *dest, const UText *src, UBool deep, UErrorCode *status) {
     return dest;
 }
 
-static void U_CALLCONV
-repTextClose(UText *ut) {
-    // Most of the work of close is done by the generic UText framework close.
-    // All that needs to be done here is delete the Replaceable if the UText
-    //  owns it.  This occurs if the UText was created by cloning.
-    if (ut->providerProperties & I32_FLAG(UTEXT_PROVIDER_OWNS_TEXT)) {
-        Replaceable *rep = (Replaceable *)ut->context;
-        delete rep;
-        ut->context = NULL;
-    }
-}
-
 static int64_t U_CALLCONV
-repTextLength(UText *ut) {
+repTextLength(UText *ut)
+{
     const Replaceable *replSrc = (const Replaceable *)ut->context;
     int32_t  len = replSrc->length();
     return len;
 }
 
 static UBool U_CALLCONV
-repTextAccess(UText *ut, int64_t index, UBool forward) {
+repTextAccess(UText *ut,
+    int64_t index, UBool forward)
+{
     const Replaceable *rep = (const Replaceable *)ut->context;
     int32_t length = rep->length();   // Full length of the input text (bigger than a chunk)
 
     // clip the requested index to the limits of the text.
     int32_t index32 = utext_pinIndex32(index, length);
     U_ASSERT(index <= INT32_MAX);
-
 
     /*
      * Compute start/limit boundaries around index, for a segment of text
@@ -3896,7 +4067,8 @@ static int32_t U_CALLCONV
 repTextExtract(UText *ut,
     int64_t start, int64_t limit,
     UChar *dest, int32_t destCapacity,
-    UErrorCode *status) {
+    UErrorCode *status)
+{
     const Replaceable *rep = (const Replaceable *)ut->context;
     int32_t  length = rep->length();
 
@@ -3939,7 +4111,8 @@ static int32_t U_CALLCONV
 repTextReplace(UText *ut,
     int64_t start, int64_t limit,
     const UChar *src, int32_t length,
-    UErrorCode *status) {
+    UErrorCode *status)
+{
     Replaceable *rep = (Replaceable *)ut->context;
     int32_t oldLength;
 
@@ -4053,6 +4226,19 @@ repTextCopy(UText *ut,
     repTextAccess(ut, nativeIterIndex, TRUE);
 }
 
+static void U_CALLCONV
+repTextClose(UText *ut)
+{
+    // Most of the work of close is done by the generic UText framework close.
+    // All that needs to be done here is delete the Replaceable if the UText
+    //  owns it.  This occurs if the UText was created by cloning.
+    if (ut->providerProperties & I32_FLAG(UTEXT_PROVIDER_OWNS_TEXT)) {
+        Replaceable *rep = (Replaceable *)ut->context;
+        delete rep;
+        ut->context = NULL;
+    }
+}
+
 static const struct UTextFuncs repFuncs =
 {
     sizeof(UTextFuncs),
@@ -4066,13 +4252,15 @@ static const struct UTextFuncs repFuncs =
     NULL,              // MapOffsetToNative,
     NULL,              // MapIndexToUTF16,
     repTextClose,
-    NULL,              // spare 1
-    NULL,              // spare 2
-    NULL               // spare 3
+    NULL,              // Truncate
+    NULL,
+    NULL
 };
 
 U_CAPI UText * U_EXPORT2
-utext_openReplaceable(UText *ut, Replaceable *rep, UErrorCode *status)
+utext_openReplaceable(UText *ut,
+    Replaceable *rep,
+    UErrorCode *status)
 {
     if (U_FAILURE(*status)) {
         return NULL;

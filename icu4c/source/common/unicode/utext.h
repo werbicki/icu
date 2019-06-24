@@ -1031,10 +1031,10 @@ utext_truncate(UText *ut,
 
 /**
  *
- * Copy the contents of one UText to antoher.
+ * Concatenate to UText together.
  *
  * This function is only available on UText types that support writing,
- * that is, ones where utext_isWritable() returns TRUE.
+ * that is, ones where utext_isWritable() returns TRUE, for the dst parameter.
  *
  * When using this function, there should be only a single UText opened onto the
  * underlying native text string.  Behavior after a copy operation
@@ -1048,7 +1048,7 @@ utext_truncate(UText *ut,
  * @stable
  */
 U_CAPI int64_t U_EXPORT2
-utext_copyUText(UText *dst,
+utext_concat(UText *dst,
     UText *src,
     UErrorCode *status);
 

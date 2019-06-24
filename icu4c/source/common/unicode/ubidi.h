@@ -1295,16 +1295,9 @@ ubidi_setUContext(UBiDi *pBiDi,
  *        is also set for paragraph separators.
  *        Level 0 for other characters is treated as a wildcard
  *        and is lifted up to the resolved level of the surrounding paragraph.<br><br>
- *        <strong>Caution: </strong>A copy of this pointer, not of the levels,
- *        will be stored in the <code>UBiDi</code> object;
- *        the <code>embeddingLevels</code> array must not be
- *        deallocated before the <code>UBiDi</code> structure is destroyed or reused,
- *        and the <code>embeddingLevels</code>
- *        should not be modified to avoid unexpected results on subsequent Bidi operations.
- *        However, the <code>ubidi_setPara()</code> and
- *        <code>ubidi_setLine()</code> functions may modify some or all of the levels.<br><br>
- *        After the <code>UBiDi</code> object is reused or destroyed, the caller
- *        must take care of the deallocation of the <code>embeddingLevels</code> array.<br><br>
+ *        The contents of this pointer are stored independently in the <code>UBiDi</code> object;
+ *        so the <code>embeddingLevels</code> array may be
+ *        deallocated before the <code>UBiDi</code> structure is destroyed or reused.
  *        <strong>Note:</strong> the <code>embeddingLevels</code> array must be
  *        at least <code>length</code> long.
  *        This pointer can be <code>NULL</code> if this
@@ -1314,9 +1307,12 @@ ubidi_setUContext(UBiDi *pBiDi,
  * @stable ICU 2.0
  */
 U_STABLE void U_EXPORT2
-ubidi_setPara(UBiDi *pBiDi, const UChar *text, int32_t length,
-              UBiDiLevel paraLevel, UBiDiLevel *embeddingLevels,
-              UErrorCode *pErrorCode);
+ubidi_setPara(UBiDi *pBiDi, 
+    const UChar *text, 
+    int32_t length,
+    UBiDiLevel paraLevel, 
+    UBiDiLevel *embeddingLevels,
+    UErrorCode *pErrorCode);
 
 /**
  * Perform the Unicode Bidi algorithm. It is defined in the
@@ -1366,6 +1362,10 @@ ubidi_setPara(UBiDi *pBiDi, const UChar *text, int32_t length,
  *
  * @param embeddingLevels (in) may be used to preset the embedding and override levels,
  *        ignoring characters like LRE and PDF in the text.
+ *        The levels corespond to the code points in the UText so one level is consumed 
+ *        by one code point in order to accout for different encodings of the UText.
+ *        A level overrides the directional property of its corresponding
+ *        (same index) character if the level has the
  *        A level overrides the directional property of its corresponding
  *        (same index) character if the level has the
  *        <code>#UBIDI_LEVEL_OVERRIDE</code> bit set.<br><br>
@@ -1377,28 +1377,25 @@ ubidi_setPara(UBiDi *pBiDi, const UChar *text, int32_t length,
  *        is also set for paragraph separators.
  *        Level 0 for other characters is treated as a wildcard
  *        and is lifted up to the resolved level of the surrounding paragraph.<br><br>
- *        <strong>Caution: </strong>A copy of this pointer, not of the levels,
- *        will be stored in the <code>UBiDi</code> object;
- *        the <code>embeddingLevels</code> array must not be
- *        deallocated before the <code>UBiDi</code> structure is destroyed or reused,
- *        and the <code>embeddingLevels</code>
- *        should not be modified to avoid unexpected results on subsequent Bidi operations.
- *        However, the <code>ubidi_setPara()</code> and
- *        <code>ubidi_setLine()</code> functions may modify some or all of the levels.<br><br>
- *        After the <code>UBiDi</code> object is reused or destroyed, the caller
- *        must take care of the deallocation of the <code>embeddingLevels</code> array.<br><br>
- *        <strong>Note:</strong> the <code>embeddingLevels</code> array must be
- *        at least <code>length</code> long.
+ *        The contents of this pointer are stored independently in the <code>UBiDi</code> object;
+ *        so the <code>embeddingLevels</code> array may be
+ *        deallocated before the <code>UBiDi</code> structure is destroyed or reused.
  *        This pointer can be <code>NULL</code> if this
  *        value is not necessary.
+ * @param embeddingLevelsLen (in) the length of the embedding levels.
+ *        <strong>Note:</strong> generally the <code>embeddingLevels</code> array must be
+ *        at least <code>length</code> long.
  *
  * @param pErrorCode must be a valid pointer to an error code value.
  * @stable 
  */
 U_CAPI void U_EXPORT2
-ubidi_setUPara(UBiDi *pBiDi, UText *ut,
-              UBiDiLevel paraLevel, UBiDiLevel *embeddingLevels,
-              UErrorCode *pErrorCode);
+ubidi_setUPara(UBiDi *pBiDi, 
+    UText *ut,
+    UBiDiLevel paraLevel, 
+    UBiDiLevel *embeddingLevels, 
+    int32_t embeddingLevelsLen,
+    UErrorCode *pErrorCode);
 
 /**
  * <code>ubidi_setLine()</code> sets a <code>UBiDi</code> to
@@ -1730,9 +1727,11 @@ ubidi_getLevels(UBiDi *pBiDi, UErrorCode *pErrorCode);
  * @see ubidi_getProcessedLength
  * @stable ICU 2.0
  */
-U_STABLE void U_EXPORT2
-ubidi_getLogicalRun(const UBiDi *pBiDi, int32_t logicalPosition,
-                    int32_t *pLogicalLimit, UBiDiLevel *pLevel);
+U_STABLE int32_t U_EXPORT2
+ubidi_getLogicalRun(const UBiDi *pBiDi, 
+    int32_t logicalPosition,
+    int32_t *pLogicalLimit, 
+    UBiDiLevel *pLevel);
 
 /**
  * Get the number of runs.
@@ -2286,6 +2285,14 @@ ubidi_setClassCallback(UBiDi *pBiDi, UBiDiClassCallback *newFn,
  */
 U_STABLE void U_EXPORT2
 ubidi_getClassCallback(UBiDi *pBiDi, UBiDiClassCallback **fn, const void **context);
+
+U_CAPI int32_t U_EXPORT2
+ubidi_getVisualText(UBiDi *pBiDi,
+    UText *dstUt,
+    int32_t start,
+    int32_t limit,
+    uint16_t options,
+    UErrorCode *pErrorCode);
 
 /**
  * Take a <code>UBiDi</code> object containing the reordering

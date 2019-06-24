@@ -1662,12 +1662,23 @@ shapeToArabicDigitsWithContext(UText *ut,
  */
 
 U_STABLE int32_t U_EXPORT2
-u_shapeUText(UText *srcUt, UText *dstUt,
+u_shapeUArabic(UText *srcUt, UText *dstUt,
     uint32_t options,
     UErrorCode *pErrorCode) {
 
     if ((pErrorCode == NULL) || (U_FAILURE(*pErrorCode))) {
         return 0;
+    }
+
+    UChar preFlight[1];
+    UText *preflightUt = NULL;
+
+    if ((dstUt == NULL) && ((options & U_SHAPE_DIGITS_MASK) != U_SHAPE_DIGITS_NOOP)) {
+        preflightUt = utext_openU16(NULL, preFlight, 0, 0, pErrorCode);
+        if (U_FAILURE(*pErrorCode))
+            return 0;
+
+        dstUt = preflightUt;
     }
 
     if (srcUt == NULL || dstUt == NULL) {
@@ -1737,7 +1748,7 @@ u_shapeUText(UText *srcUt, UText *dstUt,
         shapeVars.tailChar = OLD_TAIL_CHAR;
     }
 
-    dstNativeLength = (int32_t)utext_copyUText(dstUt, srcUt, pErrorCode);
+    dstNativeLength = (int32_t)utext_concat(dstUt, srcUt, pErrorCode);
     if (!U_FAILURE(*pErrorCode))
     {
         // Perform letter shaping.
@@ -1856,6 +1867,10 @@ u_shapeUText(UText *srcUt, UText *dstUt,
         }
     }
 
+    if (utext_isValid(preflightUt)) {
+        utext_close(preflightUt);
+    }
+
     return dstNativeLength;
 }
 
@@ -1870,7 +1885,7 @@ u_shapeArabic(const UChar *src, int32_t srcLength,
     }
 
     if ((src == NULL) || (srcLength < -1)
-        || (destSize < 0) || ((destSize > 0) && (dest == NULL))
+        || (destSize < 0) || ((destSize > 0) && (dest == NULL) && ((options & U_SHAPE_DIGITS_MASK) == U_SHAPE_DIGITS_NOOP))
         ) {
         *pErrorCode = U_ILLEGAL_ARGUMENT_ERROR;
         return 0;
@@ -1889,13 +1904,7 @@ u_shapeArabic(const UChar *src, int32_t srcLength,
         return 0;
 
     UText dstUt = UTEXT_INITIALIZER;
-    UChar preFlight[1];
-    if (dest == NULL) {
-        utext_openU16(&dstUt, preFlight, 0, 0, pErrorCode);
-        if (U_FAILURE(*pErrorCode))
-            return 0;
-    }
-    else {
+    if (dest != NULL) {
         utext_openU16(&dstUt, dest, 0, destSize, pErrorCode);
         if (U_FAILURE(*pErrorCode))
             return 0;
@@ -1903,7 +1912,7 @@ u_shapeArabic(const UChar *src, int32_t srcLength,
 
     // A stack allocated UText wrapping a UChar * string
     // can be dumped without explicitly closing it.
-    int32_t length = u_shapeUText(&srcUt, &dstUt, options, pErrorCode);
+    int32_t length = u_shapeUArabic(&srcUt, (dest == NULL ? NULL : &dstUt), options, pErrorCode);
 
     utext_close(&srcUt);
     utext_close(&dstUt);

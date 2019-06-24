@@ -1,17 +1,21 @@
 // © 2016 and later: Unicode, Inc. and others.
 // License & terms of use: http://www.unicode.org/copyright.html
 /********************************************************************
- * COPYRIGHT:
- * Copyright (c) 1997-2016, International Business Machines Corporation and
- * others. All Rights Reserved.
- ********************************************************************/
-/*   file name:  cbiditst.h
+*
+*   Copyright (c) 1997-2016, International Business Machines Corporation and
+*   others. All Rights Reserved.
+*
+*********************************************************************
+*   file name:  cbiditst.h
 *   encoding:   UTF-8
 *   tab size:   8 (not used)
 *   indentation:4
 *
 *   created on: 1999sep22
 *   created by: Markus W. Scherer
+*
+*   Contributions:
+*   UText and UBiDi enhancements by Paul Werbicki
 */
 
 #ifndef CBIDITST_H
@@ -73,7 +77,7 @@ typedef struct {
 } BiDiTestData;
 
 extern const BiDiTestData
-tests[];
+tests[3][23];
 
 extern const int
 bidiTestCount;

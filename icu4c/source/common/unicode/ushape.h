@@ -109,8 +109,73 @@ u_shapeArabic(const UChar *source, int32_t sourceLength,
               uint32_t options,
               UErrorCode *pErrorCode);
 
+/**
+ * Shape Arabic text on a character basis.
+ *
+ * <p>This function performs basic operations for "shaping" Arabic text. It is most
+ * useful for use with legacy data formats and legacy display technology
+ * (simple terminals). All operations are performed on Unicode characters.</p>
+ *
+ * <p>Text-based shaping means that some character code points in the text are
+ * replaced by others depending on the context. It transforms one kind of text
+ * into another. In comparison, modern displays for Arabic text select
+ * appropriate, context-dependent font glyphs for each text element, which means
+ * that they transform text into a glyph vector.</p>
+ *
+ * <p>Text transformations are necessary when modern display technology is not
+ * available or when text needs to be transformed to or from legacy formats that
+ * use "shaped" characters. Since the Arabic script is cursive, connecting
+ * adjacent letters to each other, computers select images for each letter based
+ * on the surrounding letters. This usually results in four images per Arabic
+ * letter: initial, middle, final, and isolated forms. In Unicode, on the other
+ * hand, letters are normally stored abstract, and a display system is expected
+ * to select the necessary glyphs. (This makes searching and other text
+ * processing easier because the same letter has only one code.) It is possible
+ * to mimic this with text transformations because there are characters in
+ * Unicode that are rendered as letters with a specific shape
+ * (or cursive connectivity). They were included for interoperability with
+ * legacy systems and codepages, and for unsophisticated display systems.</p>
+ *
+ * <p>A second kind of text transformations is supported for Arabic digits:
+ * For compatibility with legacy codepages that only include European digits,
+ * it is possible to replace one set of digits by another, changing the
+ * character code points. These operations can be performed for either
+ * Arabic-Indic Digits (U+0660...U+0669) or Eastern (Extended) Arabic-Indic
+ * digits (U+06f0...U+06f9).</p>
+ *
+ * <p>Some replacements may result in more or fewer characters (code points).
+ * By default, this means that the destination buffer may receive text with a
+ * length different from the source length. Some legacy systems rely on the
+ * length of the text to be constant. They expect extra spaces to be added
+ * or consumed either next to the affected character or at the end of the
+ * text.</p>
+ *
+ * <p>For details about the available operations, see the description of the
+ * <code>U_SHAPE_...</code> options.</p>
+ *
+ * @param source The input UText.
+ *
+ * @param dest The destination UTextr that will receive the results of the
+ *             requested operations. It may be <code>NULL</code> only if
+ *             <code>destSize</code> is 0. The source and destination must not
+ *             overlap.
+ *
+ * @param options This is a 32-bit set of flags that specify the operations
+ *                that are performed on the input text. If no error occurs,
+ *                then the result will always be written to the destination
+ *                buffer.
+ *
+ * @param pErrorCode must be a valid pointer to an error code value,
+ *        which must not indicate a failure before the function call.
+ *
+ * @return The number of UChars written to the destination buffer.
+ *         If an error occurred, then no output was written, or it may be
+ *         incomplete. If <code>U_BUFFER_OVERFLOW_ERROR</code> is set, then
+ *         the return value indicates the necessary destination buffer size.
+ * @stable 
+ */
 U_STABLE int32_t U_EXPORT2
-u_shapeUText(UText *srcUt, UText *dstUt,
+u_shapeUArabic(UText *srcUt, UText *dstUt,
     uint32_t options,
     UErrorCode *pErrorCode);
 

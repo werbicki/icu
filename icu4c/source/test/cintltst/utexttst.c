@@ -1,19 +1,22 @@
 // © 2016 and later: Unicode, Inc. and others.
 // License & terms of use: http://www.unicode.org/copyright.html
 /********************************************************************
- * COPYRIGHT:
- * Copyright (c) 2005-2013, International Business Machines Corporation and
- * others. All Rights Reserved.
- ********************************************************************/
- /*
- * File utexttst.c
- *
- * Modification History:
- *
- *   Date          Name               Description
- *   06/13/2005    Andy Heninger      Creation
- *******************************************************************************
- */
+*
+*   Copyright (c) 2005-2013, International Business Machines Corporation and
+*   others. All Rights Reserved.
+*
+*********************************************************************
+*   file name:  utexttst.c
+*   encoding:   UTF-8
+*   tab size:   8 (not used)
+*   indentation:4
+*
+*   created on: 2005jun13
+*   created by: Andy Heninger
+*
+*   Contributions:
+*   UText enhancements by Paul Werbicki
+*/
 
 #include "unicode/utypes.h"
 #include "unicode/ustring.h"
@@ -23,11 +26,135 @@
 #include "memory.h"
 #include "string.h"
 
-static void TestAPI(void);
-static void TestU8(void);
-static void TestU16(void);
-static void TestU32(void);
+/*
+ * Structures ----------------------------------------------------
+ *
+ */
+
+enum UEncoding {
+    UEncoding_U8 = 8,
+    UEncoding_U16 = 16,
+    UEncoding_U32 = 32
+};
+
+/*
+ * Prototypes ---------------------------------------------------
+ *
+ */
+
+// tsutil/UTextTest/TestAPI
+
 void addUTextTest(TestNode** root);
+
+static void TestAPI(void);
+
+// tsutil/UTextTest/TestU8
+
+static void _testAccessAPI(UText* ut, int32_t i, UBool isClone);
+
+static void _testExtractAPI(UText* ut, int32_t i);
+
+static void _testReplaceAPI(UText* ut, int32_t i, int32_t length);
+
+static void _testCopyAPI(UText* ut, int32_t i, int32_t length);
+
+static void _testAccess(UText *ut, int32_t cpCount, int32_t* cpNativeIdx, UChar32* cpMap);
+
+static void _testCopyMove(
+    UText *ut,
+    const UChar* u16String,
+    int32_t u16Len,
+    UBool move,
+    int32_t nativeStart,
+    int32_t nativeLimit,
+    int32_t nativeDest,
+    int32_t u16Start,
+    int32_t u16Limit,
+    int32_t u16Dest,
+    enum UEncoding encoding
+);
+
+static void _testCMR(
+    UText *ut,
+    const UChar* u16String,
+    int32_t u16Len,
+    int32_t cpCount,
+    int32_t* cpNativeIdx,
+    int32_t* u16NativeIdx,
+    const char* fullRepString,
+    enum UEncoding encoding
+);
+
+static void _testFreeze(UText* ut);
+
+static void _testTruncate(UText* ut);
+
+static void _testNotOnCodePoints(
+    UText* ut,
+    int32_t* startMap,
+    int32_t* nextMap,
+    int32_t* prevMap,
+    UChar32* c32Map,
+    UChar32* pr32Map,
+    int32_t* exLen
+);
+
+static void TestU8(void);
+
+// tsutil/UTextTest/TestU16
+
+static void TestU16(void);
+
+// tsutil/UTextTest/TestU32
+
+static void TestU32(void);
+
+/*
+ * Helpers -----------------------------------------------------
+ *
+ */
+
+inline static uint32_t m_rand(void);
+
+static int64_t
+u32_strlen(const UChar32 *s);
+
+static int32_t
+u32_strcmp(const UChar32 *s1,
+    const UChar32 *s2);
+
+static void BuildU8Map(
+    const uint8_t* u8String,
+    int32_t u8Len,
+    int32_t cpCount,
+    int32_t* u8NativeIdx,
+    UChar32* u8Map
+);
+
+static int32_t BuildU16Map(
+    const UChar* u16String,
+    int32_t u16Len,
+    int32_t* u16NativeIdx,
+    UChar32* u16Map
+);
+
+static void BuildU32Map(
+    const UChar32* u32String,
+    int32_t cpCount,
+    int32_t* u32NativeIdx,
+    UChar32* u32Map
+);
+
+static void BuildU8MapFromU16(
+    const UChar* u16String,
+    int32_t u16Len,
+    int32_t* u8NativeIdx
+);
+
+/*
+ * Regression Tests -------------------------------------------
+ *
+ */
 
 void
 addUTextTest(TestNode** root)
@@ -42,23 +169,22 @@ static UBool gFailed = FALSE;
 static int gTestNum = 0;
 
 #define TEST_ASSERT(x) \
-{ if ((x)==FALSE) {log_err("Test #%d failure in file %s at line %d\n", gTestNum, __FILE__, __LINE__);\
+{ if ((x)==FALSE) {log_err("%s(%d): Test #%d failed\n", __FILE__, __LINE__, gTestNum);\
                      gFailed = TRUE;\
    }}
 
 #define TEST_SUCCESS(status) \
-{ if (U_FAILURE(status)) {log_err("Test #%d failure in file %s at line %d. Error = \"%s\"\n", \
-       gTestNum, __FILE__, __LINE__, u_errorName(status)); \
+{ if (U_FAILURE(status)) {log_err("%s(%d): Test #%d failed, error %s\n", \
+       __FILE__, __LINE__, gTestNum, u_errorName(status)); \
        gFailed = TRUE;\
    }}
 
-#define BUFFER_SIZE 2000
+/*
+ * UText ------------------------------------------------------
+ *
+ */
 
-enum UEncoding {
-    UEncoding_U8 = 8,
-    UEncoding_U16 = 16,
-    UEncoding_U32 = 32
-};
+#define BUFFER_SIZE 2000
 
 // Quick and dirty random number generator.
 // Don't use library so that results are portable and predictable.
@@ -315,7 +441,7 @@ static const struct {
     , { NULL }
 };
 
-static void TestAccessAPI(UText* ut, int32_t i, UBool isClone)
+static void _testAccessAPI(UText* ut, int32_t i, UBool isClone)
 {
     gTestNum++;
     gFailed = FALSE;
@@ -418,7 +544,7 @@ static void TestAccessAPI(UText* ut, int32_t i, UBool isClone)
     ucnv_close(u16Convertor);
 }
 
-static void TestExtractAPI(UText* ut, int32_t i)
+static void _testExtractAPI(UText* ut, int32_t i)
 {
     gTestNum++;
     gFailed = FALSE;
@@ -461,7 +587,7 @@ static void TestExtractAPI(UText* ut, int32_t i)
     ucnv_close(u16Convertor);
 }
 
-static void TestReplaceAPI(UText* ut, int32_t i, int32_t length)
+static void _testReplaceAPI(UText* ut, int32_t i, int32_t length)
 {
     gTestNum++;
     gFailed = FALSE;
@@ -572,7 +698,7 @@ static void TestReplaceAPI(UText* ut, int32_t i, int32_t length)
     ucnv_close(u16Convertor);
 }
 
-static void TestCopyAPI(UText* ut, int32_t i, int32_t length)
+static void _testCopyAPI(UText* ut, int32_t i, int32_t length)
 {
     gTestNum++;
     gFailed = FALSE;
@@ -668,7 +794,22 @@ static void TestCopyAPI(UText* ut, int32_t i, int32_t length)
     ucnv_close(u16Convertor);
 }
 
-void TestAccess(UText *ut, int32_t cpCount, int32_t* cpNativeIdx, UChar32* cpMap)
+static void _testTruncateAPI(UText* ut)
+{
+    gTestNum++;
+    gFailed = FALSE;
+    UErrorCode status = U_ZERO_ERROR;
+
+    int64_t utLength = utext_nativeLength(ut);
+
+    utext_truncate(ut, &status);
+
+    if ((utLength > 0) && (utLength == utext_nativeLength(ut))) {
+        log_err("\utext_truncate(): Result is wrong, expected length 0, got %d\n", utLength);
+    }
+}
+
+static void _testAccess(UText *ut, int32_t cpCount, int32_t* cpNativeIdx, UChar32* cpMap)
 {
     gTestNum++;
     gFailed = FALSE;
@@ -878,7 +1019,7 @@ void TestAccess(UText *ut, int32_t cpCount, int32_t* cpNativeIdx, UChar32* cpMap
     }
 }
 
-void TestExtract(
+static void TestExtract(
     UText *ut,
     const UChar* u16String,
     int32_t u16Len,
@@ -947,7 +1088,7 @@ void TestExtract(
     }
 }
 
-void TestReplace(
+static void TestReplace(
     UText *ut,
     const UChar* u16String,
     int32_t u16Len,
@@ -1032,7 +1173,7 @@ cleanupAndReturn:
     utext_close(targetUT);
 }
 
-void TestCopyMove(
+static void _testCopyMove(
     UText *ut,
     const UChar* u16String,
     int32_t u16Len,
@@ -1102,21 +1243,21 @@ void TestCopyMove(
             if (encoding == UEncoding_U8) {
                 TEST_ASSERT(uti == u8NativeIdx[usi]); // Pass in U16 index, get U8 index back
                 if (uti != u8NativeIdx[usi])
-                    log_err("\nTestCopyMove(): Index is wrong expected %d, got %d\n", u8NativeIdx[usi], uti);
+                    log_err("\n_testCopyMove(): Index is wrong expected %d, got %d\n", u8NativeIdx[usi], uti);
             }
             else if (encoding == UEncoding_U32) {
                 TEST_ASSERT(uti == cpi); // Match by code point
                 if (uti != cpi)
-                    log_err("\nTestCopyMove(): Index is wrong expected %d, got %d\n", cpi, uti);
+                    log_err("\n_testCopyMove(): Index is wrong expected %d, got %d\n", cpi, uti);
             }
             else {
                 TEST_ASSERT(uti == usi);
                 if (uti != usi)
-                    log_err("\nTestCopyMove(): Index is wrong expected %d, got %d\n", usi, uti);
+                    log_err("\n_testCopyMove(): Index is wrong expected %d, got %d\n", usi, uti);
             }
             TEST_ASSERT(utc == usc);
             if (utc != usc)
-                log_err("\nTestCopyMove(): Result is wrong at %d, expected %d, got %d\n", uti, utc, usc);
+                log_err("\n_testCopyMove(): Result is wrong at %d, expected %d, got %d\n", uti, utc, usc);
             U16_FWD_N(u16Buf, usi, u16Len + u16RepLen, 1);
             uti = utext_getNativeIndex(targetUT);
             if (gFailed) {
@@ -1135,7 +1276,7 @@ cleanupAndReturn:
     utext_close(targetUT);
 }
 
-void TestCMR(
+static void _testCMR(
     UText *ut,
     const UChar* u16String,
     int32_t u16Len,
@@ -1229,11 +1370,11 @@ void TestCMR(
                 u16Dest = u16NativeIdx[destIndex];
 
                 gFailed = FALSE;
-                TestCopyMove(ut, u16String, u16Len, FALSE,
+                _testCopyMove(ut, u16String, u16Len, FALSE,
                     nativeStart, nativeLimit, nativeDest,
                     u16Start, u16Limit, u16Dest, encoding);
 
-                TestCopyMove(ut, u16String, u16Len, TRUE,
+                _testCopyMove(ut, u16String, u16Len, TRUE,
                     nativeStart, nativeLimit, nativeDest,
                     u16Start, u16Limit, u16Dest, encoding);
 
@@ -1264,7 +1405,7 @@ void TestCMR(
 }
 
 // Check isWritable() and freeze() behavior.
-void TestFreeze(UText* ut) {
+static void _testFreeze(UText* ut) {
     gFailed = FALSE;
     UErrorCode status = U_ZERO_ERROR;
 
@@ -1283,8 +1424,21 @@ void TestFreeze(UText* ut) {
     TEST_ASSERT(status == U_NO_WRITE_PERMISSION);
 }
 
+// Check isWritable() and freeze() behavior.
+static void _testTruncate(UText* ut) {
+    gFailed = FALSE;
+    UErrorCode status = U_ZERO_ERROR;
+
+    int64_t length = utext_nativeLength(ut);
+    TEST_ASSERT(length > 0);
+
+    utext_truncate(ut, &status);
+
+    TEST_ASSERT(utext_nativeLength(ut) == 0);
+}
+
 // Index to positions not on code point boundaries.
-static void TestNotOnCodePoints(
+static void _testNotOnCodePoints(
     UText* ut,
     int32_t* startMap,
     int32_t* nextMap,
@@ -1463,13 +1617,13 @@ static void TestU8(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestAccessAPI(ut, i, FALSE);
+                _testAccessAPI(ut, i, FALSE);
 
                 utsc = utext_clone(NULL, ut, FALSE, TRUE, &status);
                 TEST_SUCCESS(status);
                 if ((utsc) && (!U_FAILURE(status)))
                 {
-                    TestAccessAPI(utsc, i, TRUE);
+                    _testAccessAPI(utsc, i, TRUE);
                     utext_close(utsc);
                 }
 
@@ -1477,7 +1631,7 @@ static void TestU8(void)
                 TEST_SUCCESS(status);
                 if ((utdc) && (!U_FAILURE(status)))
                 {
-                    TestAccessAPI(utdc, i, TRUE);
+                    _testAccessAPI(utdc, i, TRUE);
                     utext_close(utdc);
                 }
 
@@ -1489,13 +1643,13 @@ static void TestU8(void)
             TEST_SUCCESS(status);
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestAccessAPI(ut, i, FALSE);
+                _testAccessAPI(ut, i, FALSE);
 
                 utsc = utext_clone(NULL, ut, FALSE, FALSE, &status);
                 TEST_SUCCESS(status);
                 if ((utsc) && (!U_FAILURE(status)))
                 {
-                    TestAccessAPI(utsc, i, TRUE);
+                    _testAccessAPI(utsc, i, TRUE);
                     utext_close(utsc);
                 }
 
@@ -1503,7 +1657,7 @@ static void TestU8(void)
                 TEST_SUCCESS(status);
                 if ((utdc) && (!U_FAILURE(status)))
                 {
-                    TestAccessAPI(utdc, i, TRUE);
+                    _testAccessAPI(utdc, i, TRUE);
                     utext_close(utdc);
                 }
 
@@ -1545,13 +1699,13 @@ static void TestU8(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestExtractAPI(ut, i);
+                _testExtractAPI(ut, i);
 
                 utsc = utext_clone(NULL, ut, FALSE, TRUE, &status);
                 TEST_SUCCESS(status);
                 if ((utsc) && (!U_FAILURE(status)))
                 {
-                    TestExtractAPI(utsc, i);
+                    _testExtractAPI(utsc, i);
                     utext_close(utsc);
                 }
 
@@ -1559,7 +1713,7 @@ static void TestU8(void)
                 TEST_SUCCESS(status);
                 if ((utdc) && (!U_FAILURE(status)))
                 {
-                    TestExtractAPI(utdc, i);
+                    _testExtractAPI(utdc, i);
                     utext_close(utdc);
                 }
 
@@ -1571,13 +1725,13 @@ static void TestU8(void)
             TEST_SUCCESS(status);
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestExtractAPI(ut, i);
+                _testExtractAPI(ut, i);
 
                 utsc = utext_clone(NULL, ut, FALSE, FALSE, &status);
                 TEST_SUCCESS(status);
                 if ((utsc) && (!U_FAILURE(status)))
                 {
-                    TestExtractAPI(utsc, i);
+                    _testExtractAPI(utsc, i);
                     utext_close(utsc);
                 }
 
@@ -1585,7 +1739,7 @@ static void TestU8(void)
                 TEST_SUCCESS(status);
                 if ((utdc) && (!U_FAILURE(status)))
                 {
-                    TestExtractAPI(utdc, i);
+                    _testExtractAPI(utdc, i);
                     utext_close(utdc);
                 }
 
@@ -1630,13 +1784,13 @@ static void TestU8(void)
                 TEST_SUCCESS(status);
                 if ((utdc) && (!U_FAILURE(status)))
                 {
-                    TestReplaceAPI(utdc, i, u8InLenBefore);
-                    TestFreeze(utdc);
+                    _testReplaceAPI(utdc, i, u8InLenBefore);
+                    _testFreeze(utdc);
                     utext_close(utdc);
                 }
 
-                TestReplaceAPI(ut, i, u8InLenBefore);
-                TestFreeze(ut);
+                _testReplaceAPI(ut, i, u8InLenBefore);
+                _testFreeze(ut);
                 utext_close(ut);
             }
         }
@@ -1678,13 +1832,13 @@ static void TestU8(void)
                 TEST_SUCCESS(status);
                 if ((utdc) && (!U_FAILURE(status)))
                 {
-                    TestCopyAPI(utdc, i, u8InLenBefore);
-                    TestFreeze(utdc);
+                    _testCopyAPI(utdc, i, u8InLenBefore);
+                    _testFreeze(utdc);
                     utext_close(utdc);
                 }
 
-                TestCopyAPI(ut, i, u8InLenBefore);
-                TestFreeze(ut);
+                _testCopyAPI(ut, i, u8InLenBefore);
+                _testFreeze(ut);
                 utext_close(ut);
             }
         }
@@ -1716,10 +1870,16 @@ static void TestU8(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestAccess(ut, cpCount, u8NativeIdx, u8Map);
+                _testAccess(ut, cpCount, u8NativeIdx, u8Map);
                 TestExtract(ut, u16Buf, u16Len, cpCount, u8NativeIdx);
-                TestCMR(ut, u16Buf, u16Len, cpCount, u8NativeIdx, u16NativeIdx, fullRepString, UEncoding_U8);
-                TestFreeze(ut);
+                _testCMR(ut, u16Buf, u16Len, cpCount, u8NativeIdx, u16NativeIdx, fullRepString, UEncoding_U8);
+
+                if ((u8Len > 0) && (i % 2 == 1)) {
+                    _testTruncate(ut);
+                }
+                else {
+                    _testFreeze(ut);
+                }
 
                 utext_close(ut);
             }
@@ -1762,10 +1922,10 @@ static void TestU8(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestAccess(ut, cpCount, u8NativeIdx, u8Map);
+                _testAccess(ut, cpCount, u8NativeIdx, u8Map);
                 TestExtract(ut, u16Buf, u16Len, cpCount, u8NativeIdx);
-                TestCMR(ut, u16Buf, u16Len, cpCount, u8NativeIdx, u16NativeIdx, fullRepString, UEncoding_U8);
-                TestFreeze(ut);
+                _testCMR(ut, u16Buf, u16Len, cpCount, u8NativeIdx, u16NativeIdx, fullRepString, UEncoding_U8);
+                _testFreeze(ut);
 
                 utext_close(ut);
             }
@@ -1805,10 +1965,10 @@ static void TestU8(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestAccess(ut, cpCount, u8NativeIdx, u8Map);
+                _testAccess(ut, cpCount, u8NativeIdx, u8Map);
                 TestExtract(ut, u16Buf, u16Len, cpCount, u8NativeIdx);
-                TestCMR(ut, u16Buf, u16Len, cpCount, u8NativeIdx, u16NativeIdx, fullRepString, UEncoding_U8);
-                TestFreeze(ut);
+                _testCMR(ut, u16Buf, u16Len, cpCount, u8NativeIdx, u16NativeIdx, fullRepString, UEncoding_U8);
+                _testFreeze(ut);
 
                 utext_close(ut);
             }
@@ -1870,14 +2030,14 @@ static void TestU8(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestAccess(ut, cpCount, u8NativeIdx, u8Map);
+                _testAccess(ut, cpCount, u8NativeIdx, u8Map);
                 TestExtract(ut, u16Buf, u16Len, cpCount, u8NativeIdx);
 
-                // TestReplace/TestCopyMove use a stack buffer of only BUFFER_SIZE
+                // TestReplace/_testCopyMove use a stack buffer of only BUFFER_SIZE
                 if (u8Len < BUFFER_SIZE)
-                    TestCMR(ut, u16Buf, u16Len, cpCount, u8NativeIdx, u16NativeIdx, fullRepString, UEncoding_U8);
+                    _testCMR(ut, u16Buf, u16Len, cpCount, u8NativeIdx, u16NativeIdx, fullRepString, UEncoding_U8);
 
-                TestFreeze(ut);
+                _testFreeze(ut);
 
                 utext_close(ut);
             }
@@ -1901,7 +2061,7 @@ static void TestU8(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestNotOnCodePoints(
+                _testNotOnCodePoints(
                     ut,
                     startMap,
                     nextMap,
@@ -2001,13 +2161,13 @@ static void TestU16(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestAccessAPI(ut, i, FALSE);
+                _testAccessAPI(ut, i, FALSE);
 
                 utsc = utext_clone(NULL, ut, FALSE, TRUE, &status);
                 TEST_SUCCESS(status);
                 if ((utsc) && (!U_FAILURE(status)))
                 {
-                    TestAccessAPI(utsc, i, TRUE);
+                    _testAccessAPI(utsc, i, TRUE);
                     utext_close(utsc);
                 }
 
@@ -2015,7 +2175,7 @@ static void TestU16(void)
                 TEST_SUCCESS(status);
                 if ((utdc) && (!U_FAILURE(status)))
                 {
-                    TestAccessAPI(utdc, i, TRUE);
+                    _testAccessAPI(utdc, i, TRUE);
                     utext_close(utdc);
                 }
 
@@ -2027,13 +2187,13 @@ static void TestU16(void)
             TEST_SUCCESS(status);
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestAccessAPI(ut, i, FALSE);
+                _testAccessAPI(ut, i, FALSE);
 
                 utsc = utext_clone(NULL, ut, FALSE, FALSE, &status);
                 TEST_SUCCESS(status);
                 if ((utsc) && (!U_FAILURE(status)))
                 {
-                    TestAccessAPI(utsc, i, TRUE);
+                    _testAccessAPI(utsc, i, TRUE);
                     utext_close(utsc);
                 }
 
@@ -2041,7 +2201,7 @@ static void TestU16(void)
                 TEST_SUCCESS(status);
                 if ((utdc) && (!U_FAILURE(status)))
                 {
-                    TestAccessAPI(utdc, i, TRUE);
+                    _testAccessAPI(utdc, i, TRUE);
                     utext_close(utdc);
                 }
 
@@ -2085,13 +2245,13 @@ static void TestU16(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestExtractAPI(ut, i);
+                _testExtractAPI(ut, i);
 
                 utsc = utext_clone(NULL, ut, FALSE, TRUE, &status);
                 TEST_SUCCESS(status);
                 if ((utsc) && (!U_FAILURE(status)))
                 {
-                    TestExtractAPI(utsc, i);
+                    _testExtractAPI(utsc, i);
                     utext_close(utsc);
                 }
 
@@ -2099,7 +2259,7 @@ static void TestU16(void)
                 TEST_SUCCESS(status);
                 if ((utdc) && (!U_FAILURE(status)))
                 {
-                    TestExtractAPI(utdc, i);
+                    _testExtractAPI(utdc, i);
                     utext_close(utdc);
                 }
 
@@ -2111,13 +2271,13 @@ static void TestU16(void)
             TEST_SUCCESS(status);
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestExtractAPI(ut, i);
+                _testExtractAPI(ut, i);
 
                 utsc = utext_clone(NULL, ut, FALSE, FALSE, &status);
                 TEST_SUCCESS(status);
                 if ((utsc) && (!U_FAILURE(status)))
                 {
-                    TestExtractAPI(utsc, i);
+                    _testExtractAPI(utsc, i);
                     utext_close(utsc);
                 }
 
@@ -2125,7 +2285,7 @@ static void TestU16(void)
                 TEST_SUCCESS(status);
                 if ((utdc) && (!U_FAILURE(status)))
                 {
-                    TestExtractAPI(utdc, i);
+                    _testExtractAPI(utdc, i);
                     utext_close(utdc);
                 }
 
@@ -2171,13 +2331,13 @@ static void TestU16(void)
                 TEST_SUCCESS(status);
                 if ((utdc) && (!U_FAILURE(status)))
                 {
-                    TestReplaceAPI(utdc, i, u16InLenBefore);
-                    TestFreeze(utdc);
+                    _testReplaceAPI(utdc, i, u16InLenBefore);
+                    _testFreeze(utdc);
                     utext_close(utdc);
                 }
 
-                TestReplaceAPI(ut, i, u16InLenBefore);
-                TestFreeze(ut);
+                _testReplaceAPI(ut, i, u16InLenBefore);
+                _testFreeze(ut);
                 utext_close(ut);
             }
         }
@@ -2220,13 +2380,13 @@ static void TestU16(void)
                 TEST_SUCCESS(status);
                 if ((utdc) && (!U_FAILURE(status)))
                 {
-                    TestCopyAPI(utdc, i, u16InLenBefore);
-                    TestFreeze(utdc);
+                    _testCopyAPI(utdc, i, u16InLenBefore);
+                    _testFreeze(utdc);
                     utext_close(utdc);
                 }
 
-                TestCopyAPI(ut, i, u16InLenBefore);
-                TestFreeze(ut);
+                _testCopyAPI(ut, i, u16InLenBefore);
+                _testFreeze(ut);
                 utext_close(ut);
             }
         }
@@ -2253,10 +2413,16 @@ static void TestU16(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestAccess(ut, cpCount, u16NativeIdx, u16Map);
+                _testAccess(ut, cpCount, u16NativeIdx, u16Map);
                 TestExtract(ut, u16Buf, u16Len, cpCount, u16NativeIdx);
-                TestCMR(ut, u16Buf, u16Len, cpCount, u16NativeIdx, u16NativeIdx, fullRepString, UEncoding_U16);
-                TestFreeze(ut);
+                _testCMR(ut, u16Buf, u16Len, cpCount, u16NativeIdx, u16NativeIdx, fullRepString, UEncoding_U16);
+
+                if ((u16Len > 0) && (i % 2 == 1)) {
+                    _testTruncate(ut);
+                }
+                else {
+                    _testFreeze(ut);
+                }
 
                 utext_close(ut);
             }
@@ -2294,10 +2460,10 @@ static void TestU16(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestAccess(ut, cpCount, u16NativeIdx, u16Map);
+                _testAccess(ut, cpCount, u16NativeIdx, u16Map);
                 TestExtract(ut, u16Buf, u16Len, cpCount, u16NativeIdx);
-                TestCMR(ut, u16Buf, u16Len, cpCount, u16NativeIdx, u16NativeIdx, fullRepString, UEncoding_U16);
-                TestFreeze(ut);
+                _testCMR(ut, u16Buf, u16Len, cpCount, u16NativeIdx, u16NativeIdx, fullRepString, UEncoding_U16);
+                _testFreeze(ut);
 
                 utext_close(ut);
             }
@@ -2331,10 +2497,10 @@ static void TestU16(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestAccess(ut, cpCount, u16NativeIdx, u16Map);
+                _testAccess(ut, cpCount, u16NativeIdx, u16Map);
                 TestExtract(ut, u16Buf, u16Len, cpCount, u16NativeIdx);
-                TestCMR(ut, u16Buf, u16Len, cpCount, u16NativeIdx, u16NativeIdx, fullRepString, UEncoding_U16);
-                TestFreeze(ut);
+                _testCMR(ut, u16Buf, u16Len, cpCount, u16NativeIdx, u16NativeIdx, fullRepString, UEncoding_U16);
+                _testFreeze(ut);
 
                 utext_close(ut);
             }
@@ -2359,7 +2525,7 @@ static void TestU16(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestNotOnCodePoints(
+                _testNotOnCodePoints(
                     ut,
                     startMap,
                     nextMap,
@@ -2446,13 +2612,13 @@ static void TestU32(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestAccessAPI(ut, i, FALSE);
+                _testAccessAPI(ut, i, FALSE);
 
                 utsc = utext_clone(NULL, ut, FALSE, TRUE, &status);
                 TEST_SUCCESS(status);
                 if ((utsc) && (!U_FAILURE(status)))
                 {
-                    TestAccessAPI(utsc, i, TRUE);
+                    _testAccessAPI(utsc, i, TRUE);
                     utext_close(utsc);
                 }
 
@@ -2460,7 +2626,7 @@ static void TestU32(void)
                 TEST_SUCCESS(status);
                 if ((utdc) && (!U_FAILURE(status)))
                 {
-                    TestAccessAPI(utdc, i, TRUE);
+                    _testAccessAPI(utdc, i, TRUE);
                     utext_close(utdc);
                 }
 
@@ -2472,13 +2638,13 @@ static void TestU32(void)
             TEST_SUCCESS(status);
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestAccessAPI(ut, i, FALSE);
+                _testAccessAPI(ut, i, FALSE);
 
                 utsc = utext_clone(NULL, ut, FALSE, FALSE, &status);
                 TEST_SUCCESS(status);
                 if ((utsc) && (!U_FAILURE(status)))
                 {
-                    TestAccessAPI(utsc, i, TRUE);
+                    _testAccessAPI(utsc, i, TRUE);
                     utext_close(utsc);
                 }
 
@@ -2486,7 +2652,7 @@ static void TestU32(void)
                 TEST_SUCCESS(status);
                 if ((utdc) && (!U_FAILURE(status)))
                 {
-                    TestAccessAPI(utdc, i, TRUE);
+                    _testAccessAPI(utdc, i, TRUE);
                     utext_close(utdc);
                 }
 
@@ -2535,13 +2701,13 @@ static void TestU32(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestExtractAPI(ut, i);
+                _testExtractAPI(ut, i);
 
                 utsc = utext_clone(NULL, ut, FALSE, TRUE, &status);
                 TEST_SUCCESS(status);
                 if ((utsc) && (!U_FAILURE(status)))
                 {
-                    TestExtractAPI(utsc, i);
+                    _testExtractAPI(utsc, i);
                     utext_close(utsc);
                 }
 
@@ -2549,7 +2715,7 @@ static void TestU32(void)
                 TEST_SUCCESS(status);
                 if ((utdc) && (!U_FAILURE(status)))
                 {
-                    TestExtractAPI(utdc, i);
+                    _testExtractAPI(utdc, i);
                     utext_close(utdc);
                 }
 
@@ -2561,13 +2727,13 @@ static void TestU32(void)
             TEST_SUCCESS(status);
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestExtractAPI(ut, i);
+                _testExtractAPI(ut, i);
 
                 utsc = utext_clone(NULL, ut, FALSE, FALSE, &status);
                 TEST_SUCCESS(status);
                 if ((utsc) && (!U_FAILURE(status)))
                 {
-                    TestExtractAPI(utsc, i);
+                    _testExtractAPI(utsc, i);
                     utext_close(utsc);
                 }
 
@@ -2575,7 +2741,7 @@ static void TestU32(void)
                 TEST_SUCCESS(status);
                 if ((utdc) && (!U_FAILURE(status)))
                 {
-                    TestExtractAPI(utdc, i);
+                    _testExtractAPI(utdc, i);
                     utext_close(utdc);
                 }
 
@@ -2627,13 +2793,13 @@ static void TestU32(void)
                 TEST_SUCCESS(status);
                 if ((utdc) && (!U_FAILURE(status)))
                 {
-                    TestReplaceAPI(utdc, i, u32InLenBefore);
-                    TestFreeze(utdc);
+                    _testReplaceAPI(utdc, i, u32InLenBefore);
+                    _testFreeze(utdc);
                     utext_close(utdc);
                 }
 
-                TestReplaceAPI(ut, i, u32InLenBefore);
-                TestFreeze(ut);
+                _testReplaceAPI(ut, i, u32InLenBefore);
+                _testFreeze(ut);
                 utext_close(ut);
             }
         }
@@ -2682,13 +2848,13 @@ static void TestU32(void)
                 TEST_SUCCESS(status);
                 if ((utdc) && (!U_FAILURE(status)))
                 {
-                    TestCopyAPI(utdc, i, u32InLenBefore);
-                    TestFreeze(utdc);
+                    _testCopyAPI(utdc, i, u32InLenBefore);
+                    _testFreeze(utdc);
                     utext_close(utdc);
                 }
 
-                TestCopyAPI(ut, i, u32InLenBefore);
-                TestFreeze(ut);
+                _testCopyAPI(ut, i, u32InLenBefore);
+                _testFreeze(ut);
                 utext_close(ut);
             }
         }
@@ -2727,10 +2893,16 @@ static void TestU32(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestAccess(ut, cpCount, u32NativeIdx, u32Map);
+                _testAccess(ut, cpCount, u32NativeIdx, u32Map);
                 TestExtract(ut, u16Buf, u16Len, cpCount, u32NativeIdx);
-                TestCMR(ut, u16Buf, u16Len, cpCount, u32NativeIdx, u16NativeIdx, fullRepString, UEncoding_U32);
-                TestFreeze(ut);
+                _testCMR(ut, u16Buf, u16Len, cpCount, u32NativeIdx, u16NativeIdx, fullRepString, UEncoding_U32);
+
+                if ((u32Len > 0) && (i % 2 == 1)) {
+                    _testTruncate(ut);
+                }
+                else {
+                    _testFreeze(ut);
+                }
 
                 utext_close(ut);
             }
@@ -2773,10 +2945,10 @@ static void TestU32(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestAccess(ut, cpCount, u32NativeIdx, u32Map);
+                _testAccess(ut, cpCount, u32NativeIdx, u32Map);
                 TestExtract(ut, u16Buf, u16Len, cpCount, u32NativeIdx);
-                TestCMR(ut, u16Buf, u16Len, cpCount, u32NativeIdx, u16NativeIdx, fullRepString, UEncoding_U32);
-                TestFreeze(ut);
+                _testCMR(ut, u16Buf, u16Len, cpCount, u32NativeIdx, u16NativeIdx, fullRepString, UEncoding_U32);
+                _testFreeze(ut);
 
                 utext_close(ut);
             }
@@ -2816,10 +2988,10 @@ static void TestU32(void)
 
             if ((ut) && (!U_FAILURE(status)))
             {
-                TestAccess(ut, cpCount, u32NativeIdx, u32Map);
+                _testAccess(ut, cpCount, u32NativeIdx, u32Map);
                 TestExtract(ut, u16Buf, u16Len, cpCount, u32NativeIdx);
-                TestCMR(ut, u16Buf, u16Len, cpCount, u32NativeIdx, u16NativeIdx, fullRepString, UEncoding_U32);
-                TestFreeze(ut);
+                _testCMR(ut, u16Buf, u16Len, cpCount, u32NativeIdx, u16NativeIdx, fullRepString, UEncoding_U32);
+                _testFreeze(ut);
 
                 utext_close(ut);
             }
